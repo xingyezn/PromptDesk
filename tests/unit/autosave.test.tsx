@@ -31,6 +31,7 @@ function fixture() {
     projectId: newId('project'),
     title: '合成自动保存',
     status: 'draft',
+    priority: 'normal',
     target: 'Codex',
     order: 1,
     parentPromptId: null,

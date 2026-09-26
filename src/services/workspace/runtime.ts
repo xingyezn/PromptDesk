@@ -11,6 +11,7 @@ import {
   scratchpadSchema,
   settingsSchema,
   statusSchema,
+  prioritySchema,
   workspaceSchema,
   type PendingManifest,
   type Project,
@@ -359,7 +360,7 @@ export class WorkspaceRuntime {
     if (project.deletedAt || project.status === 'archived') throw new AppFault('BUSY');
     if (promptId) {
       const meta = this.meta(projectId, promptId);
-      if (meta.deletedAt || meta.status === 'archived') throw new AppFault('BUSY');
+      if (meta.deletedAt) throw new AppFault('BUSY');
     }
   }
   async createProject(name: string): Promise<WorkspaceView> {
@@ -430,6 +431,78 @@ export class WorkspaceRuntime {
   async createNext(projectId: string, parentPromptId: string): Promise<PromptMeta> {
     this.editable(projectId, parentPromptId);
     return this.newPrompt(projectId, '未命名提示词', parentPromptId);
+  }
+  async splitPrompt(
+    projectId: string,
+    promptId: string,
+    originalBody: string,
+    newTitle: string,
+    newBody: string,
+  ): Promise<PromptMeta> {
+    this.editable(projectId, promptId);
+    const current = this.meta(projectId, promptId);
+    if (current.status === 'completed' || !newBody.trim() || !originalBody.trim())
+      throw new AppFault('INVALID_SCHEMA');
+    const project = this.project(projectId);
+    const operationId = newId('op');
+    const at = new Date().toISOString();
+    const names = (await this.fs.list(['projects', project.slug, 'prompts'])).map(
+      (entry) => entry.name,
+    );
+    const id = nextPromptId(names);
+    const order = current.order + 1;
+    const shifted = ordered(
+      this.prompts.filter(
+        (item) => item.projectId === projectId && !item.deletedAt && item.order >= order,
+      ),
+    );
+    const adjusted = shifted.map((item) =>
+      promptSchema.parse({
+        ...item,
+        order: item.order + 1,
+        revision: item.revision + 1,
+        lastOperationId: operationId,
+        updatedAt: at,
+      }),
+    );
+    const original = promptSchema.parse({
+      ...current,
+      revision: current.revision + 1,
+      lastOperationId: operationId,
+      updatedAt: at,
+    });
+    const created = initialPrompt({
+      operationId,
+      eventId: newId('event'),
+      at,
+      projectId,
+      id,
+      title: newTitle,
+      target: current.target,
+      order,
+      parentPromptId: promptId,
+    });
+    const originalRoot = promptPath(project.slug, promptId);
+    const createdRoot = promptPath(project.slug, id);
+    await this.commit(
+      [
+        ...adjusted.map((item) =>
+          this.change([...promptPath(project.slug, item.id), 'meta.json'], json(item)),
+        ),
+        this.change([...originalRoot, 'current.md'], originalBody),
+        this.change([...createdRoot, 'current.md'], newBody),
+        this.change([...originalRoot, 'meta.json'], json(original)),
+        this.change([...createdRoot, 'meta.json'], json(created)),
+      ],
+      'prompt',
+      operationId,
+    );
+    this.replaceMeta(original);
+    for (const item of adjusted) this.replaceMeta(item);
+    this.prompts.push(created);
+    this.originals.set([...originalRoot, 'current.md'].join('/'), originalBody);
+    this.originals.set([...createdRoot, 'current.md'].join('/'), newBody);
+    return created;
   }
   private async newPrompt(
     projectId: string,
@@ -621,18 +694,17 @@ export class WorkspaceRuntime {
     promptId: string,
     body: string,
     nextStatus?: PromptStatus,
-    resubmit = false,
   ): Promise<OpenPrompt> {
     const current = this.meta(projectId, promptId);
-    if (current.status === 'archived' && nextStatus && nextStatus !== 'archived')
-      this.editable(projectId);
-    else this.editable(projectId, promptId);
+    this.editable(projectId, promptId);
     if (nextStatus) {
       statusSchema.parse(nextStatus);
       validateTransition(current, nextStatus, body);
     }
-    if (nextStatus === current.status && !resubmit)
-      return { meta: current, body, baseContentHash: await sha256(body) };
+    const bodyHash = await sha256(body);
+    const sameStateAndContent =
+      nextStatus === current.status && current.versions.at(-1)?.contentHash === bodyHash;
+    if (sameStateAndContent) return { meta: current, body, baseContentHash: bodyHash };
     const project = this.project(projectId),
       root = promptPath(project.slug, promptId),
       operationId = newId('op');
@@ -649,8 +721,7 @@ export class WorkspaceRuntime {
           number,
           fileName: versionFile(number),
           createdAt: at,
-          reason:
-            nextStatus === 'submitted' ? 'submitted' : nextStatus === 'ready' ? 'ready' : 'manual',
+          reason: nextStatus === 'ready' ? 'ready' : 'manual',
           note: '',
           contentHash,
           restoredFrom: null,
@@ -661,7 +732,7 @@ export class WorkspaceRuntime {
       }
     }
     const statusHistory = [...current.statusHistory];
-    if (nextStatus)
+    if (nextStatus && nextStatus !== current.status)
       statusHistory.push({
         id: newId('event'),
         operationId,
@@ -669,7 +740,7 @@ export class WorkspaceRuntime {
         to: nextStatus,
         at,
         versionNumber: checkpointRequired(nextStatus) ? number : null,
-        kind: resubmit ? 'resubmit' : 'transition',
+        kind: 'transition',
       });
     const next = promptSchema.parse({
       ...current,
@@ -677,9 +748,7 @@ export class WorkspaceRuntime {
       versions,
       currentVersion: number,
       statusHistory,
-      submittedAt: nextStatus === 'submitted' ? (current.submittedAt ?? at) : current.submittedAt,
-      completedAt: nextStatus === 'completed' ? at : current.completedAt,
-      submittedVersion: nextStatus === 'submitted' ? number : current.submittedVersion,
+      completedAt: nextStatus === 'completed' ? (current.completedAt ?? at) : current.completedAt,
       revision: current.revision + 1,
       lastOperationId: operationId,
       updatedAt: at,
@@ -769,7 +838,13 @@ export class WorkspaceRuntime {
   async updatePrompt(
     projectId: string,
     promptId: string,
-    patch: { title?: string; target?: string; tags?: string[]; notes?: string },
+    patch: {
+      title?: string;
+      target?: string;
+      tags?: string[];
+      notes?: string;
+      priority?: PromptMeta['priority'];
+    },
   ): Promise<PromptMeta> {
     this.editable(projectId, promptId);
     const current = this.meta(projectId, promptId),
@@ -779,6 +854,7 @@ export class WorkspaceRuntime {
       ...(patch.target === undefined ? {} : { target: patch.target }),
       ...(patch.tags === undefined ? {} : { tags: patch.tags }),
       ...(patch.notes === undefined ? {} : { notes: patch.notes }),
+      ...(patch.priority === undefined ? {} : { priority: prioritySchema.parse(patch.priority) }),
     };
     const next = promptSchema.parse({
       ...current,

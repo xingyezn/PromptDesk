@@ -11,7 +11,7 @@ export function initialPrompt(input: {
   parentPromptId: string | null;
 }): PromptMeta {
   return promptSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     lastOperationId: input.operationId,
     createdAt: input.at,
@@ -23,6 +23,7 @@ export function initialPrompt(input: {
     order: input.order,
     parentPromptId: input.parentPromptId,
     status: 'draft',
+    priority: 'normal',
     tags: [],
     notes: '',
     submittedAt: null,

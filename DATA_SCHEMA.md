@@ -2,7 +2,7 @@
 
 ## 追加约定：备份、迁移及快速新建（2026-09-26）
 
-由用户追加的功能不改变 schemaVersion=1、磁盘布局和现有状态/版本语义。新 Prompt 不必输入标题，默认 title 为“未命名提示词”；后续可通过元数据事务改标题，ID/目录不变。
+本节以下“schema v2”补充现行磁盘格式。新 Prompt 默认 title 为“未命名提示词”；Prompt 状态改为 `draft | ready | completed`，并增加 `priority: low | normal | high`。schema v1 不会静默打开或改写；应用先展示状态映射预览，用户确认后以可恢复事务迁移。旧 archived Prompt 逐条选择新状态。完整映射见“schema v1 到 v2 的确认迁移”。
 
 本地 ZIP 与复制迁移只包含本规范定义的 `.promptdesk/workspace.json`、`settings.json`、`projects/<slug>/project.json`、可选 `README.md`、Prompt `meta.json/current.md/versions/vNNN.md`、可选 `result.md`、Scratchpad `meta.json/current.md`。包括已归档/逻辑删除项；保留 JSON 未知字段和所有历史版本的原文本。不会添加额外 schema、不会修改复制文件的 revision/时间/ID。
 
@@ -10,11 +10,11 @@
 
 迁移要求用户选择空目标并确认，目标使用 initialize pending（before 全空，after 全量），根标识最后写；可以复用现有初始化恢复流程，准备阶段不完整则保留副本做诊断。原目录保留不删除；新目录保持 workspaceId，缓存目录身份必须重新计算 recentKey，不串恢复草稿。ZIP 解压后按已有 Workspace 打开；不自动迁移 schema，不实现压缩包直接导入。
 
-工作流补充：Scratchpad 转入将源 current.md 的不变内容也作为事务前置/核对目标，防止复制时接受过期正文。源 meta.transferredTo 是重复操作的唯一目标依据；转入和排序仍沿用 schema1 和原 ID/order 规则，无新增业务字段。归档对象的内容/资料只读；相关项目结构操作维持 order 连续，不改变归档状态和历史。
+工作流补充：Scratchpad 转入将源 current.md 的不变内容也作为事务前置/核对目标，防止复制时接受过期正文。源 meta.transferredTo 是重复操作的唯一目标依据；转入与排序使用现行 schema v2 字段和 ID/order 规则，不增加迁移标记。归档 Project 的内容/资料只读；相关项目结构操作维持 order 连续，不改变归档状态和历史。
 
 搜索 cache schema 仍为 DB v1，searchIndex 记录增加 recentKey（非句柄）、contentHash、revision，磁盘重读后写缓存；当前只用内存索引展示，不将未经磁盘核对的缓存当作正文来源。清空缓存不改磁盘；Scratchpad 恢复副本 entityKey 为 scratch:<id>，目前保存未落盘正文，不包含未保存标题。Settings 文件缺失或损坏时保持只读，不猜测可写默认配置。
 
-日期：2026-09-26。磁盘 schemaVersion=1；IndexedDB dbVersion 独立维护。本文将 PRD 示例字段细化为正式开发契约，补充 revision、版本元数据、状态历史、逻辑删除和恢复记录。PRD 中的简略 JSON 是产品示意，不是已发布格式；缺字段的真实目录不得默默补齐后覆盖。
+日期：2026-09-26。当前磁盘 schemaVersion=2；IndexedDB dbVersion 独立维护。schema v1 为受支持的迁移输入格式，未确认前只读预览；不支持的未来版本拒绝写入。本文将 PRD 示例字段细化为正式开发契约，补充 revision、版本元数据、状态历史、优先级、逻辑删除和恢复记录。PRD 中的简略 JSON 是产品示意，不是已发布格式；缺字段的真实目录不得默默补齐后覆盖。
 
 ## 1. 权威来源与目录结构
 
@@ -57,7 +57,7 @@ Prompt.id 为项目内 `P001`、`P002`…（至少三位，允许 P1000）；业
 
 JSON UTF-8，2 空格缩进，末尾换行。时间为 UTC ISO 8601，例如 `2026-09-26T10:00:00.000Z`；UI 转本地时区。文本正文保持用户输入，不 trim 后写入；仅用 trim 判断能否提交。SHA-256 为实际 UTF-8 字节的 64 位小写十六进制摘要，不进行隐含换行转换。时间不用于判断写入先后，版本号和 revision 才用于顺序。
 
-每个 JSON 文档有 schemaVersion=1。revision 为非负整数，创建为 0，每次该文件业务内容提交加 1；不因读取/缓存增加。lastOperationId 为最近成功事务 ID，创建后非空。createdAt 创建后不变，updatedAt 业务写入时更新。不得由 UI 随意传入这些字段。
+每个当前 JSON 文档有 schemaVersion=2。schema v1 的原始字段在迁移预览期间按 v1 schema 单独校验。revision 为非负整数，创建为 0，每次该文件业务内容提交加 1；不因读取/缓存增加。lastOperationId 为最近成功事务 ID，创建后非空。createdAt 创建后不变，updatedAt 业务写入时更新。不得由 UI 随意传入这些字段。
 
 字段除明确为 optional 的兼容项外均必需；nullable 使用 null，不混用空字符串。字符串以实际 Unicode 文本存储，不限制用户正文语言。默认空 tags、notes、description 等必须写入，不依赖消费者猜测。
 
@@ -83,11 +83,11 @@ Zod schema 是代码内唯一校验实现，由其推导类型。读取 JSON 使
 ```ts
 type ISODate = string;
 type UUIDId = string;
-type PromptStatus =
-  'idea' | 'draft' | 'ready' | 'submitted' | 'waiting' | 'completed' | 'blocked' | 'archived';
+type PromptStatus = 'draft' | 'ready' | 'completed';
+type PromptPriority = 'low' | 'normal' | 'high';
 type VersionReason = 'manual' | 'ready' | 'submitted' | 'before_restore' | 'restore';
 interface BaseDocument {
-  schemaVersion: 1;
+  schemaVersion: 2;
   revision: number;
   lastOperationId: UUIDId;
   createdAt: ISODate;
@@ -134,13 +134,14 @@ interface StatusEvent {
   to: PromptStatus;
   at: ISODate;
   versionNumber: number | null;
-  kind: 'created' | 'transition' | 'resubmit';
+  kind: 'created' | 'transition';
 }
 interface PromptMeta extends BaseDocument {
   id: string;
   projectId: UUIDId;
   title: string;
   status: PromptStatus;
+  priority: PromptPriority;
   target: string;
   order: number;
   parentPromptId: string | null;
@@ -183,7 +184,7 @@ workspace.json：
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "revision": 0,
   "lastOperationId": "op_11111111-1111-4111-8111-111111111111",
   "id": "workspace_22222222-2222-4222-8222-222222222222",
@@ -198,7 +199,7 @@ project.json：
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "revision": 0,
   "lastOperationId": "op_33333333-3333-4333-8333-333333333333",
   "id": "project_44444444-4444-4444-8444-444444444444",
@@ -217,13 +218,14 @@ Prompt meta.json：
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "revision": 1,
   "lastOperationId": "op_55555555-5555-4555-8555-555555555555",
   "id": "P001",
   "projectId": "project_44444444-4444-4444-8444-444444444444",
   "title": "制定数据检查方案",
   "status": "ready",
+  "priority": "normal",
   "target": "Codex",
   "order": 1,
   "parentPromptId": null,
@@ -281,6 +283,7 @@ Prompt meta.json：
 - 父 Prompt 被删除时引用保留，显示“前置 Prompt 已删除”；恢复父 Prompt 后重新可见。不级联删除后续 Prompt。缺失父引用显示诊断，不自动改写。
 - order 为项目内非删除 Prompt 的显示顺序；正常提交后为 1..N 连续整数（包含归档 Prompt）。重排输入必须恰好包含全部非删除 ID，事务内统一写 meta；损坏条目先修复或只读，不能漏过后强行重排。
 - createNext 设置 parentPromptId=当前 ID，插入其后，后续 order 顺移。普通创建放末尾。删除后事务压缩剩余 order；恢复 Prompt 插到末尾，不复用旧排序；已删除对象原 order 留作历史。
+- 拆分选区时选中文字逐字成为新 Prompt 正文，未选中文字拼接后留在原正文；两段都必须非空。新 Prompt 由磁盘最大 ID 分配，parentPromptId 指向原条目，紧随原条目插入并顺移后续 order；原状态和版本历史不回退，拆分写入不生成 Version。原正文、新正文、两份 meta 和排序关系通过同一 Journal 提交，取消对磁盘无影响。
 - 新 Prompt 初始 draft、currentVersion=0、versions=[]、submittedVersion=null、时间字段 null；创建一条 created 事件。可编辑 current.md 并不等于已保存 Version。
 - Prompt.currentVersion 是已提交到 meta 的最大版本号，不表示 current.md 与该版本相同。UI 如不同显示“当前草稿有改动”。
 - versions.number 唯一且递增，fileName 必须与 number 相符；submittedVersion、StatusEvent.versionNumber 必须指向已有版本。
@@ -288,43 +291,23 @@ Prompt meta.json：
 - 发现 versions 下未被 meta 引用的文件：可能为中断写入，先检查 pending。不能无条件纳入历史或覆盖；无可验证的恢复证据时提示孤立版本并只读诊断。
 - ID 分配和版本编号要扫描磁盘已有文件，任何已存在目标都不能覆写；索引和缓存不是完整性证据。
 
-## 6. Prompt 状态语义
+## 6. Prompt 状态与优先级
 
-| 枚举      | 界面     | 含义                     |
-| --------- | -------- | ------------------------ |
-| idea      | 构思     | 尚未写成可使用的提示词   |
-| draft     | 草稿     | 编辑中或准备调整         |
-| ready     | 待提交   | 准备好手动复制使用       |
-| submitted | 已提交   | 用户确认已在外部模型发送 |
-| waiting   | 等待结果 | 等待外部执行结果         |
-| completed | 已完成   | 用户确认任务完成         |
-| blocked   | 阻塞     | 需要条件/信息才能继续    |
-| archived  | 已归档   | 从默认队列隐藏，历史仍在 |
+当前 schema v2 只允许 `draft | ready | completed`。界面分别显示“草稿”“待提交”“已完成”。项目 Prompt 列表以 checkbox 表示完成操作，点击后进入项目内“已完成”分组；未完成项始终在待办分组。取消勾选恢复最后一次有效的非 completed 状态，缺少该历史时恢复 draft。completed 条目只读，取消勾选后恢复编辑。
 
-推荐主流：idea → draft → ready → submitted → waiting → completed。允许显式人工跳转，包括 submitted → draft、completed → draft；不得用硬编码线性限制禁止 PRD 允许的回退。
+用户可以从编辑页或跨项目队列手动切换任意状态，不强制线性顺序。进入 ready 或 completed 前正文 trim 后非空，并先保存/复用对应检查点，再写状态。切换失败状态不变。same-status 操作若正文不同，创建新的正文检查点但不增加重复状态事件；内容与最新版本相同则复用版本。草稿自动保存只写 current.md 与元数据，不增加 Version。复制成功不改变状态、时间或版本；应用不发送 Prompt。
 
-| 操作                          | 字段/副作用                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| 文本编辑/自动保存             | status 不变，不增加版本和状态事件                                                                                  |
-| 复制                          | status、submittedAt、版本均不变；剪贴板写成功才显示已复制                                                          |
-| 进入 ready（任一其他状态）    | 正文 trim 后非空；flush 并创建/复用当前正文检查点；记录 transition                                                 |
-| 进入 submitted                | 正文非空；flush + 检查点成功后设置 submittedVersion；首次设置 submittedAt，以后保留；记录 transition               |
-| 已 submitted 再标记提交       | 显式 resubmit 操作；创建/复用当前正文快照，更新 submittedVersion，追加 resubmit 事件，不靠重复普通 transition 触发 |
-| 进入 completed                | completedAt 更新为本次完成时间，记录 transition；不自动创建正文版本                                                |
-| 进入 waiting/blocked/其他状态 | 仅写状态与事件；blocked 可提示填写 notes，但不强制                                                                 |
-| 进入 archived                 | 不删除文件/版本；正文只读，先取消归档再编辑                                                                        |
-| 同状态重复普通 transition     | no-op，不更新时戳，不创建事件或版本                                                                                |
-| 逻辑删除                      | 只写 deletedAt，不改变 status；默认列表、统计、搜索排除                                                            |
+每条 Prompt 另有 `priority: low | normal | high`，默认 `normal`。priority 与 `order` 独立；priority 不会覆盖用户拖拽的顺序，order 是项目内明确顺序。完成分组单独显示，切换组不改变磁盘状态或顺序。
 
-submittedAt 表示首次确认提交的历史时点；completedAt 表示最近一次确认完成的历史时点，回退状态不清零。判断当前进度必须用 status，不能用这两个历史时间是否非空。每次提交/完成细节在 statusHistory 中保存。submittedVersion 指最后一次实际标记提交的快照，正文后来修改不能偷偷更新它。
+`completedAt` 记录最近一次进入 completed 的时间；撤销完成不清空历史时间。`submittedAt` 与 `submittedVersion` 是 schema v1 留存的外部提交历史字段，在 v2 不再由应用写入或作为当前状态依据。StatusEvent 的首项 created 必须 from=null，其余 from 必须与上一项 to 相符；事件 kind 仅为 created/transition。Version 保存和恢复本身不改变状态，也不追加状态事件。Project 的 `archived` 状态仍独立存在，归档项目只读。
 
-statusHistory 中 created 首项 from=null，其余 from 要与上一项 to 相符；resubmit 的 from=to=submitted。事件 id 使用 `event_<UUID>`。版本保存和恢复不属于状态切换，不追加状态事件。仅归档状态允许通过状态按钮取消归档；正文编辑与版本操作不可绕过只读限制。
+逻辑删除只写 deletedAt，不改变 status；默认列表、统计和搜索排除。状态历史不因删除而清除。
 
 ## 7. 版本策略
 
 ### 7.1 创建与去重
 
-自动保存从不创建版本。显式“保存版本”、进入 ready、进入 submitted/resubmit 创建检查点。普通 checkpoint 如果正文 hash 与最新版本相同，复用已有 number，不新建文件；新的 note 不改写旧 VersionMeta，界面说明内容未变化。若与较早版本相同但与最新不同，创建新版本，因为代表新的操作时点。
+自动保存从不创建版本。显式“保存版本”、进入 ready 或 completed 创建检查点。普通 checkpoint 如果正文 hash 与最新版本相同，复用已有 number，不新建文件；新的 note 不改写旧 VersionMeta，界面说明内容未变化。若与较早版本相同但与最新不同，创建新版本，因为代表新的操作时点。`submitted` 仅为旧 VersionMeta 的兼容历史 reason，新操作不生成。
 
 新编号至少大于 meta 中最大值及磁盘中所有合法版本文件编号。存在孤立文件先解决恢复问题，不能跳号掩盖问题。版本正文不可变，VersionMeta 提交后不可修改；V0.1 不允许删除单个版本，避免提交引用悬空。未来实现版本删除须独立设计确认和引用保全。
 
@@ -366,7 +349,8 @@ interface PendingManifest {
     | 'reorder'
     | 'delete'
     | 'scratchpad'
-    | 'settings';
+    | 'settings'
+    | 'migration';
   createdAt: ISODate;
   phase: 'prepared' | 'committed';
   commitMarkerPath: string[];
@@ -377,6 +361,14 @@ interface PendingManifest {
   }[];
 }
 ```
+
+## 10. schema v1 到 v2 的确认迁移
+
+打开 Workspace 时若根 `schemaVersion` 为 1，应用先读取并校验 v1 文档，展示各旧状态数量和所有旧 `archived` Prompt 的 ID/标题/新状态选择。预览和取消不写文件。映射为：`idea | draft → draft`；`ready | submitted | waiting | blocked → ready`；`completed → completed`；旧 `archived` 必须逐条由用户选 `draft | ready | completed`。历史 statusHistory 中 archived 值跟随该 Prompt 的选择；其余历史值按相同映射归并。优先级默认 `normal`。
+
+确认后重新扫描并校验文件、Prompt/Project 关联、版本 hash 和预览期间的磁盘指纹；任何目标变化、未知文件、无效关系或授权失败都停止。只更新 workspace/settings/project/prompt/scratchpad 的 JSON 元数据：schemaVersion 改为 2、revision 加 1、更新 lastOperationId/updatedAt、Prompt 增加 priority。所有正文、VersionMeta、版本编号和版本文件逐字节保留，不生成新 Version；旧提交字段/版本 reason 作为历史 provenance 保留但不再参与当前状态行为。workspace.json 最后作为提交标记，整组变更经 pending migration 事务提交。
+
+该流程需要已取得 Workspace 写锁。确认前取消不改源数据；提交中断保留可恢复记录，不能清除或继续普通写入。成功后只按 schema v2 打开；不支持 schema 自动降级，也不提供静默迁移。
 
 snapshotPath 相对于该 operation 目录，只能为 before/NNNN.txt、after/NNNN.txt；targetPath 相对于 Workspace，必须落在已知业务路径，不能指向 pending 本身或任意用户资料；entries 路径唯一、包含 commitMarkerPath。snapshot 文件作为备份不做 JSON 规范化，必须保留原字节。operationId 和 workspaceId 必须与目录/当前会话一致。
 

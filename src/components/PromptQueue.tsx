@@ -205,22 +205,26 @@ export function PromptQueue({
               <strong>{meta.title}</strong>
               {filters.query && body && <span>{body.slice(0, 100)}</span>}
             </button>
-            <select
-              aria-label={`${project.name} ${meta.id} 队列状态`}
-              value={meta.status}
-              disabled={
-                busy || !!progress?.running || !view.writable || project.status === 'archived'
-              }
-              onChange={(e) =>
-                void onStatus(meta.projectId, meta.id, statusSchema.parse(e.target.value))
-              }
-            >
-              {statusSchema.options.map((s) => (
-                <option key={s} value={s}>
-                  {statusLabels[s]}
-                </option>
-              ))}
-            </select>
+            <label className="todo-toggle queue-todo">
+              <input
+                type="checkbox"
+                aria-label={`${meta.id} 标记已完成`}
+                checked={meta.status === 'completed'}
+                disabled={
+                  busy || !!progress?.running || !view.writable || project.status === 'archived'
+                }
+                onChange={(event) => {
+                  const previous = meta.statusHistory.at(-1)?.from;
+                  const next = event.target.checked
+                    ? 'completed'
+                    : previous && previous !== 'completed'
+                      ? previous
+                      : 'draft';
+                  void onStatus(meta.projectId, meta.id, statusSchema.parse(next));
+                }}
+              />
+              <span className={`status-label ${meta.status}`}>{statusLabels[meta.status]}</span>
+            </label>
           </div>
         ))}
         {!matches.length && <p className="muted">没有匹配的 Prompt。</p>}

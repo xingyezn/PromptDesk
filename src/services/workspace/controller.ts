@@ -1,4 +1,5 @@
 import { attempt, AppFault } from '../../types/errors';
+import { legacyWorkspaceSchema, parseDocument } from '../../domain/schemas';
 import { NativeFileSystem } from '../filesystem/native';
 import { CacheService, type RecoveryDraft } from '../cache/cache';
 import { WorkspaceRuntime, type WorkspaceView } from './runtime';
@@ -6,6 +7,15 @@ import { acquireWorkspaceLock, type WorkspaceLock } from './lock';
 import type { WorkspaceSnapshot } from './snapshot';
 import { downloadArchive } from './archive';
 import type { SearchDocument } from '../../domain/search';
+import { workspacePath } from '../../domain/paths';
+import {
+  migrateLegacyWorkspace,
+  inspectLegacyMigration,
+  recoverLegacyMigration,
+  type ArchivedPromptChoices,
+  type LegacyMigrationState,
+  type MigrationRecovery as SchemaMigrationRecovery,
+} from './schema-migration';
 
 export interface CreationPlan {
   directoryName: string;
@@ -31,6 +41,64 @@ export class WorkspaceController {
     snapshot: WorkspaceSnapshot;
     sessionId: string;
   } | null = null;
+  private legacyMigration: {
+    fs: NativeFileSystem;
+    state: LegacyMigrationState;
+    lock: WorkspaceLock;
+  } | null = null;
+  migrationPreview() {
+    return this.legacyMigration?.state.kind === 'preview'
+      ? this.legacyMigration.state.preview
+      : null;
+  }
+  migrationRecovery(): SchemaMigrationRecovery | null {
+    return this.legacyMigration?.state.kind === 'recovery'
+      ? this.legacyMigration.state.recovery
+      : null;
+  }
+  cancelSchemaMigration() {
+    this.legacyMigration?.lock.release();
+    this.legacyMigration = null;
+  }
+  confirmSchemaMigration(choices: ArchivedPromptChoices) {
+    return attempt(async () => {
+      const plan = this.legacyMigration;
+      if (!plan || plan.state.kind !== 'preview') throw new AppFault('CONFLICT');
+      try {
+        await migrateLegacyWorkspace(plan.fs, choices, plan.state.preview.sourceFingerprint);
+      } catch (error) {
+        try {
+          const recovery = await inspectLegacyMigration(plan.fs);
+          if (recovery.kind === 'recovery') plan.state = recovery;
+        } catch {
+          // Keep the confirmed choices screen available; recovery diagnostics remain on disk.
+        }
+        throw error;
+      }
+      const runtime = await WorkspaceRuntime.open(plan.fs);
+      const view = await this.attach(runtime, plan.fs, plan.lock);
+      this.legacyMigration = null;
+      return view;
+    });
+  }
+  recoverSchemaMigration(choice: 'finish' | 'rollback') {
+    return attempt(async () => {
+      const plan = this.legacyMigration;
+      if (!plan || plan.state.kind !== 'recovery') throw new AppFault('CONFLICT');
+      const recovery = plan.state.recovery;
+      await recoverLegacyMigration(plan.fs, recovery.workspaceId, recovery.operationId, choice);
+      if (choice === 'finish') {
+        const runtime = await WorkspaceRuntime.open(plan.fs);
+        const view = await this.attach(runtime, plan.fs, plan.lock);
+        this.legacyMigration = null;
+        return { kind: 'opened' as const, view };
+      }
+      const state = await inspectLegacyMigration(plan.fs);
+      if (state.kind !== 'preview') throw new AppFault('RECOVERY_REQUIRED');
+      plan.state = state;
+      return { kind: 'preview' as const, preview: state.preview };
+    });
+  }
   directoryName() {
     return this.runtime?.directoryName() ?? '';
   }
@@ -145,6 +213,22 @@ export class WorkspaceController {
   get cacheAvailable() {
     return this.cache.available;
   }
+  getUIPreference(key: string) {
+    const workspaceId = this.runtime?.workspace.id;
+    if (!workspaceId)
+      return attempt(async () => {
+        throw new AppFault('NOT_FOUND');
+      });
+    return this.cache.getPreference(workspaceId, key);
+  }
+  setUIPreference(key: string, value: string) {
+    const workspaceId = this.runtime?.workspace.id;
+    if (!workspaceId)
+      return attempt(async () => {
+        throw new AppFault('NOT_FOUND');
+      });
+    return this.cache.putPreference(workspaceId, key, value);
+  }
   supported() {
     return NativeFileSystem.supported();
   }
@@ -177,7 +261,7 @@ export class WorkspaceController {
   open() {
     return attempt(async () => {
       const fs = await NativeFileSystem.pick();
-      return this.attach(await WorkspaceRuntime.open(fs), fs);
+      return this.attach(await this.openRuntime(fs), fs);
     });
   }
   openRecent(key: string) {
@@ -193,11 +277,48 @@ export class WorkspaceController {
     const permission = fs.authorize();
     return attempt(async () => {
       await permission;
-      return this.attach(await WorkspaceRuntime.open(fs), fs);
+      return this.attach(await this.openRuntime(fs), fs);
     });
   }
-  private async attach(runtime: WorkspaceRuntime, fs: NativeFileSystem): Promise<WorkspaceView> {
-    const lock = await acquireWorkspaceLock(runtime.workspace.id);
+  private async openRuntime(fs: NativeFileSystem) {
+    const root = await fs.read(workspacePath);
+    if (root) {
+      let document: unknown;
+      try {
+        document = JSON.parse(root.text);
+      } catch {
+        return WorkspaceRuntime.open(fs);
+      }
+      if (
+        typeof document === 'object' &&
+        document !== null &&
+        'schemaVersion' in document &&
+        document.schemaVersion === 1
+      ) {
+        const workspace = parseDocument(legacyWorkspaceSchema, root.text);
+        const lock = await acquireWorkspaceLock(workspace.id);
+        if (!lock.writable) {
+          lock.release();
+          throw new AppFault('BUSY');
+        }
+        try {
+          const state = await inspectLegacyMigration(fs);
+          this.legacyMigration = { fs, state, lock };
+        } catch (error) {
+          lock.release();
+          throw error;
+        }
+        throw new AppFault('MIGRATION_REQUIRED');
+      }
+    }
+    return WorkspaceRuntime.open(fs);
+  }
+  private async attach(
+    runtime: WorkspaceRuntime,
+    fs: NativeFileSystem,
+    retainedLock?: WorkspaceLock,
+  ): Promise<WorkspaceView> {
+    const lock = retainedLock ?? (await acquireWorkspaceLock(runtime.workspace.id));
     runtime.writable = lock.writable;
     try {
       const view = await runtime.load();
@@ -266,6 +387,7 @@ export class WorkspaceController {
       this.runtime = null;
       this.filesystem = null;
       this.migration = null;
+      this.cancelSchemaMigration();
       this.lock = null;
     });
   }

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { unzipSync, strFromU8 } from 'fflate';
 import { installSyntheticPicker } from './synthetic-picker';
 
-test('direct creation, unopened list status, formatting, settings, ZIP and migration', async ({
+test('direct creation, todo completion, formatting, settings, ZIP and migration', async ({
   page,
 }) => {
   await page.addInitScript(installSyntheticPicker);
@@ -15,6 +15,7 @@ test('direct creation, unopened list status, formatting, settings, ZIP and migra
   await page.getByLabel('名称', { exact: true }).fill('合成管理项目');
   await page.getByRole('button', { name: '确认', exact: true }).click();
   await page.getByRole('button', { name: '新建 Prompt', exact: true }).last().click();
+  await expect(page.getByRole('button', { name: '复制 Prompt', exact: true })).toBeVisible();
   const body = page.getByRole('textbox', { name: 'Prompt 正文' });
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await body.fill('合成第一条正文');
@@ -23,10 +24,16 @@ test('direct creation, unopened list status, formatting, settings, ZIP and migra
   await expect(page.getByText('P002 / PROMPT', { exact: true })).toBeVisible();
   await body.fill('合成第二条正文');
   const url = page.url();
-  await page.getByLabel('P001 列表状态', { exact: true }).selectOption('submitted');
-  await expect(page.getByLabel('P001 列表状态', { exact: true })).toHaveValue('submitted');
+  await page.getByLabel('P001 标记已完成', { exact: true }).click();
+  await page.getByRole('tab', { name: '已完成 1', exact: true }).click();
+  await expect(page.getByLabel('P001 标记已完成', { exact: true })).toBeChecked();
   expect(page.url()).toBe(url);
   await expect(body).toHaveText('合成第二条正文');
+  await expect(
+    page.getByRole('button', { name: '打开 P001 未命名提示词', exact: true }),
+  ).toBeVisible();
+  await page.getByLabel('P001 标记已完成', { exact: true }).click();
+  await page.getByRole('tab', { name: /待办/ }).click();
   await page.getByRole('button', { name: '打开 P001 未命名提示词', exact: true }).click();
   await expect(page.getByText('V1', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '修改标题', exact: true }).click();
@@ -74,7 +81,7 @@ test('direct creation, unopened list status, formatting, settings, ZIP and migra
   await expect(page.getByText('合成已设置空间', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '合成管理项目', exact: true }).click();
   await page.getByRole('button', { name: '打开 P001 合成可选标题', exact: true }).click();
-  await expect(page.getByLabel('Prompt 状态', { exact: true })).toHaveValue('submitted');
+  await expect(page.getByLabel('Prompt 状态', { exact: true })).toHaveValue('draft');
   await expect(body.locator('.cm-line')).toHaveText([
     '| 列 1 | 列 2 |',
     '| --- | --- |',

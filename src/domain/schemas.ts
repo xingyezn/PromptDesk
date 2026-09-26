@@ -32,13 +32,14 @@ const tags = z
   .refine((value) => new Set(value).size === value.length);
 const target = z.string().trim().min(1).max(100);
 const base = {
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   revision: z.number().int().nonnegative(),
   lastOperationId: id('op'),
   createdAt: iso,
   updatedAt: iso,
 };
-export const statusSchema = z.enum([
+const baseV1 = { ...base, schemaVersion: z.literal(1) };
+export const legacyStatusSchema = z.enum([
   'idea',
   'draft',
   'ready',
@@ -48,7 +49,10 @@ export const statusSchema = z.enum([
   'blocked',
   'archived',
 ]);
+export const statusSchema = z.enum(['draft', 'ready', 'completed']);
+export const prioritySchema = z.enum(['low', 'normal', 'high']);
 export type PromptStatus = z.infer<typeof statusSchema>;
+export type PromptPriority = z.infer<typeof prioritySchema>;
 export const versionReasonLabels = {
   manual: '手动保存',
   ready: '待提交检查点',
@@ -57,14 +61,14 @@ export const versionReasonLabels = {
   restore: '历史恢复',
 } as const;
 export const statusLabels: Record<PromptStatus, string> = {
-  idea: '构思',
   draft: '草稿',
   ready: '待提交',
-  submitted: '已提交',
-  waiting: '等待结果',
   completed: '已完成',
-  blocked: '阻塞',
-  archived: '已归档',
+};
+export const priorityLabels: Record<PromptPriority, string> = {
+  low: '低优先级',
+  normal: '普通',
+  high: '高优先级',
 };
 export const workspaceSchema = z
   .object({ ...base, id: id('workspace'), name: title, description: text })
@@ -116,7 +120,7 @@ export const statusEventSchema = z
     to: statusSchema,
     at: iso,
     versionNumber: z.number().int().positive().nullable(),
-    kind: z.enum(['created', 'transition', 'resubmit']),
+    kind: z.enum(['created', 'transition']),
   })
   .passthrough();
 export const promptSchema = z
@@ -126,6 +130,7 @@ export const promptSchema = z
     projectId: id('project'),
     title,
     status: statusSchema,
+    priority: prioritySchema,
     target,
     order: z.number().int().positive(),
     parentPromptId: promptIdSchema.nullable(),
@@ -158,11 +163,44 @@ export const promptSchema = z
           : event.from !== value.statusHistory[i - 1]?.to || event.kind === 'created'
       )
         issue();
-      if (event.kind === 'resubmit' && (event.from !== 'submitted' || event.to !== 'submitted'))
-        issue();
     }
     if (value.statusHistory.at(-1)?.to !== value.status) issue();
   });
+export const legacyWorkspaceSchema = workspaceSchema.extend({ schemaVersion: z.literal(1) });
+export const legacySettingsSchema = settingsSchema.extend({ schemaVersion: z.literal(1) });
+export const legacyProjectSchema = projectSchema.extend({ schemaVersion: z.literal(1) });
+const legacyStatusEventSchema = z
+  .object({
+    id: id('event'),
+    operationId: id('op'),
+    from: legacyStatusSchema.nullable(),
+    to: legacyStatusSchema,
+    at: iso,
+    versionNumber: z.number().int().positive().nullable(),
+    kind: z.enum(['created', 'transition', 'resubmit']),
+  })
+  .passthrough();
+export const legacyPromptSchema = z
+  .object({
+    ...baseV1,
+    id: promptIdSchema,
+    projectId: id('project'),
+    title,
+    status: legacyStatusSchema,
+    target,
+    order: z.number().int().positive(),
+    parentPromptId: promptIdSchema.nullable(),
+    tags,
+    notes: text,
+    submittedAt: iso.nullable(),
+    completedAt: iso.nullable(),
+    submittedVersion: z.number().int().positive().nullable(),
+    currentVersion: z.number().int().nonnegative(),
+    versions: z.array(versionSchema),
+    statusHistory: z.array(legacyStatusEventSchema).min(1),
+    deletedAt: iso.nullable(),
+  })
+  .passthrough();
 export const scratchpadSchema = z
   .object({
     ...base,
@@ -173,6 +211,7 @@ export const scratchpadSchema = z
     transferredAt: iso.nullable(),
   })
   .passthrough();
+export const legacyScratchpadSchema = scratchpadSchema.extend({ schemaVersion: z.literal(1) });
 const relativePath = z
   .array(z.string())
   .min(1)
@@ -202,6 +241,7 @@ export const pendingSchema = z
       'delete',
       'scratchpad',
       'settings',
+      'migration',
     ]),
     createdAt: iso,
     phase: z.enum(['prepared', 'committed']),
@@ -237,7 +277,7 @@ export function parseDocument<T>(schema: z.ZodType<T>, content: string): T {
     value !== null &&
     'schemaVersion' in value &&
     typeof value.schemaVersion === 'number' &&
-    value.schemaVersion > 1
+    value.schemaVersion > 2
   )
     throw new AppFault('SCHEMA_TOO_NEW');
   const parsed = schema.safeParse(value);
@@ -249,7 +289,7 @@ export const newId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 export const baseDocument = (operationId: string) => {
   const at = new Date().toISOString();
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     revision: 0,
     lastOperationId: operationId,
     createdAt: at,

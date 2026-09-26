@@ -8,6 +8,9 @@ import {
   FolderOpen,
   History,
   LayoutDashboard,
+  GripVertical,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Search,
   Settings,
@@ -22,6 +25,8 @@ import { ScratchpadWorkspace } from '../components/ScratchpadWorkspace';
 import {
   statusLabels,
   statusSchema,
+  priorityLabels,
+  prioritySchema,
   versionReasonLabels,
   type PromptStatus,
 } from '../domain/schemas';
@@ -33,11 +38,25 @@ import type { Result } from '../types/errors';
 import { AppFault } from '../types/errors';
 import { useEditorStore } from '../stores/editor';
 import { usePromptEditor } from '../hooks/usePromptEditor';
+import {
+  archivedChoiceKey,
+  type ArchivedPromptChoices,
+  type MigrationPreview,
+  type MigrationRecovery,
+} from '../services/workspace/schema-migration';
 
 type Dialog =
   | { kind: 'workspace'; name: string; plan: CreationPlan }
   | { kind: 'project'; name: string; id: string | null }
   | { kind: 'rename-prompt'; name: string; projectId: string; id: string }
+  | {
+      kind: 'split-prompt';
+      name: string;
+      projectId: string;
+      id: string;
+      originalBody: string;
+      newBody: string;
+    }
   | { kind: 'delete-project'; id: string }
   | { kind: 'delete-prompt'; projectId: string; id: string }
   | { kind: 'restore'; number: number }
@@ -48,6 +67,11 @@ const savedLabels = {
   dirty: '有未保存修改',
   saving: '正在保存…',
   failed: '保存失败 · 内容已保留',
+};
+const migrationStatusLabel = (status: string) => {
+  if (status === 'idea' || status === 'draft') return '草稿';
+  if (status === 'completed') return '已完成';
+  return '待提交';
 };
 const MarkdownEditor = lazy(() =>
   import('../components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor })),
@@ -67,6 +91,11 @@ export function App() {
   const [historyBody, setHistoryBody] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [listView, setListView] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [migrationPreview, setMigrationPreview] = useState<MigrationPreview | null>(null);
+  const [migrationRecovery, setMigrationRecovery] = useState<MigrationRecovery | null>(null);
+  const [migrationChoices, setMigrationChoices] = useState<ArchivedPromptChoices>({});
   const [details, setDetails] = useState<'project' | 'prompt' | null>(null);
   const [protectedDraft, setProtectedDraft] = useState<{ sessionId: string; body: string } | null>(
     null,
@@ -104,6 +133,14 @@ export function App() {
       if (result.ok) setRecents(result.value);
     });
   }, []);
+  useEffect(() => {
+    const sessionId = view?.sessionId;
+    if (!sessionId) return;
+    void api.getUIPreference('sidebarCollapsed').then((result) => {
+      if (api.view()?.sessionId === sessionId && result.ok)
+        setSidebarCollapsed(result.value === 'true');
+    });
+  }, [view?.sessionId]);
   const activeSessionId = view?.sessionId;
   useEffect(() => {
     if (!activeSessionId) return;
@@ -202,10 +239,10 @@ export function App() {
       view?.issues.some((issue) => issue.startsWith(`projects/${currentProject.slug}/`))
     ) ||
     !!currentProject?.deletedAt ||
-    doc?.meta.status === 'archived' ||
+    doc?.meta.status === 'completed' ||
     !!doc?.meta.deletedAt;
   const activeProjects = view?.projects.filter((p) => !p.deletedAt) ?? [];
-  const visiblePrompts = ordered(
+  const projectPrompts = ordered(
     (view?.prompts ?? []).filter(
       (p) =>
         p.projectId === project?.id &&
@@ -214,6 +251,9 @@ export function App() {
           `${p.title} ${p.target} ${p.tags.join(' ')}`.toLowerCase().includes(query.toLowerCase())),
     ),
   );
+  const activePrompts = projectPrompts.filter((p) => p.status !== 'completed');
+  const completedPrompts = projectPrompts.filter((p) => p.status === 'completed');
+  const visiblePrompts = showCompleted ? completedPrompts : activePrompts;
   async function saveDetails(input: MetadataInput) {
     setBusy(true);
     try {
@@ -261,13 +301,65 @@ export function App() {
     try {
       if (!(await flush())) return;
       const ids = ordered(
-        view?.prompts.filter((p) => p.projectId === project.id && !p.deletedAt) ?? [],
+        view?.prompts.filter(
+          (p) =>
+            p.projectId === project.id &&
+            !p.deletedAt &&
+            (p.status === 'completed') === showCompleted,
+        ) ?? [],
       ).map((p) => p.id);
       const from = ids.indexOf(id),
         to = from + direction;
       if (from < 0 || to < 0 || to >= ids.length) return;
       [ids[from], ids[to]] = [ids[to]!, ids[from]!];
-      const next = consume(await api.run((runtime) => runtime.reorder(project.id, ids)));
+      const next = consume(
+        await api.run((runtime) => runtime.reorder(project.id, composePromptOrder(ids))),
+      );
+      if (next) {
+        setView(next);
+        useEditorStore.setState((state) => {
+          const meta = next.prompts.find(
+            (p) =>
+              p.id === state.document?.meta.id && p.projectId === state.document.meta.projectId,
+          );
+          return meta && state.document ? { document: { ...state.document, meta } } : {};
+        });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  function composePromptOrder(groupIds: string[]) {
+    if (!project) return groupIds;
+    const all = ordered(
+      view?.prompts.filter((p) => p.projectId === project.id && !p.deletedAt) ?? [],
+    );
+    const otherIds = all
+      .filter((p) => (p.status === 'completed') !== showCompleted)
+      .map((p) => p.id);
+    return showCompleted ? [...otherIds, ...groupIds] : [...groupIds, ...otherIds];
+  }
+  async function movePromptBefore(id: string, targetId: string) {
+    if (!project || busy || id === targetId) return;
+    setBusy(true);
+    try {
+      if (!(await flush())) return;
+      const ids = ordered(
+        view?.prompts.filter(
+          (p) =>
+            p.projectId === project.id &&
+            !p.deletedAt &&
+            (p.status === 'completed') === showCompleted,
+        ) ?? [],
+      ).map((p) => p.id);
+      const from = ids.indexOf(id);
+      const target = ids.indexOf(targetId);
+      if (from < 0 || target < 0) return;
+      ids.splice(from, 1);
+      ids.splice(ids.indexOf(targetId), 0, id);
+      const next = consume(
+        await api.run((runtime) => runtime.reorder(project.id, composePromptOrder(ids))),
+      );
       if (next) {
         setView(next);
         useEditorStore.setState((state) => {
@@ -394,6 +486,23 @@ export function App() {
           setDialog(null);
           await openDoc(meta.projectId, meta.id);
         }
+      } else if (dialog.kind === 'split-prompt') {
+        const created = consume(
+          await api.run((runtime) =>
+            runtime.splitPrompt(
+              dialog.projectId,
+              dialog.id,
+              dialog.originalBody,
+              dialog.name,
+              dialog.newBody,
+            ),
+          ),
+        );
+        if (created) {
+          setDialog(null);
+          setView(api.view());
+          await openDoc(created.projectId, created.id);
+        }
       } else if (dialog.kind === 'delete-project') {
         if (!(await flush())) return;
         const next = consume(
@@ -464,7 +573,22 @@ export function App() {
   }
   async function launch(recentKey?: string) {
     setBusy(true);
-    const next = consume(await (recentKey ? api.openRecent(recentKey) : api.open()));
+    const result = await (recentKey ? api.openRecent(recentKey) : api.open());
+    if (!result.ok && result.error.code === 'MIGRATION_REQUIRED') {
+      const plan = api.migrationPreview();
+      const recovery = api.migrationRecovery();
+      if (recovery) {
+        setMigrationRecovery(recovery);
+        setMigrationPreview(null);
+        setMessage('');
+      } else if (plan) {
+        setMigrationRecovery(null);
+        setMigrationPreview(plan);
+        setMigrationChoices({});
+        setMessage('');
+      } else consume(result);
+    }
+    const next = result.ok ? consume(result) : undefined;
     if (next) {
       setView(next);
       useEditorStore.getState().load(null);
@@ -508,15 +632,17 @@ export function App() {
           ? '创建本地工作空间'
           : dialog.kind === 'project'
             ? '项目名称'
-            : dialog.kind === 'rename-prompt'
-              ? '修改 Prompt 标题'
-              : dialog.kind === 'restore'
-                ? '恢复历史版本'
-                : dialog.kind === 'reload-disk'
-                  ? '保留草稿并重新加载磁盘'
-                  : dialog.kind === 'recovery-draft'
-                    ? '发现未保存的恢复副本'
-                    : '确认删除'
+            : dialog.kind === 'split-prompt'
+              ? '拆分为新 Prompt'
+              : dialog.kind === 'rename-prompt'
+                ? '修改 Prompt 标题'
+                : dialog.kind === 'restore'
+                  ? '恢复历史版本'
+                  : dialog.kind === 'reload-disk'
+                    ? '保留草稿并重新加载磁盘'
+                    : dialog.kind === 'recovery-draft'
+                      ? '发现未保存的恢复副本'
+                      : '确认删除'
       }
       onClose={() => {
         if (!busy) setDialog(null);
@@ -535,8 +661,14 @@ export function App() {
               {dialog.plan.nonempty ? '此目录非空，已有资料将保留。' : '提示词只保存在这个目录中。'}
             </p>
           )}
+          {dialog.kind === 'split-prompt' && (
+            <p>
+              选中的内容将成为新 Prompt，剩余内容保留在当前
+              Prompt。新条目会排在当前项后面，并关联为其后续任务。
+            </p>
+          )}
           <label>
-            名称
+            {dialog.kind === 'split-prompt' ? '新 Prompt 标题' : '名称'}
             <input
               autoFocus
               value={dialog.name}
@@ -602,71 +734,231 @@ export function App() {
           <span className="beta">开发预览 · V0.1</span>
         </nav>
         <main className="launcher-main">
-          <span className="eyebrow">
-            <span className="dot" />
-            YOUR LOCAL PROMPT WORKSPACE
-          </span>
-          <h1>
-            先写好，
-            <br />
-            再出发<span className="accent">。</span>
-          </h1>
-          <p className="lead">
-            给思考一个安全的地方。
-            <br />
-            整理项目、准备下一步，让每一条提示词都有迹可循。
-          </p>
-          <div className="launch-actions">
-            <button
-              className="primary large"
-              disabled={busy || !api.supported()}
-              onClick={() => void launch()}
-            >
-              <FolderOpen size={19} />
-              打开已有工作空间
-              <ArrowUpRight size={17} />
-            </button>
-            <button
-              className="large"
-              disabled={busy || !api.supported()}
-              onClick={() => void startCreation()}
-            >
-              <Plus size={19} />
-              创建新工作空间
-            </button>
-          </div>
-          {!api.supported() && (
-            <p className="notice">
-              请使用桌面 Chrome 或 Edge，通过 HTTPS 或 localhost 打开以访问本地目录。
-            </p>
-          )}
-          {message && (
-            <p className="notice" role="alert">
-              {message}
-            </p>
-          )}
-          {!api.cacheAvailable && (
-            <p className="notice">浏览器缓存不可用，可通过选择目录继续使用。</p>
-          )}
-          {recents.length > 0 && (
-            <section className="recent">
-              <h2>最近使用</h2>
-              {recents.map((r) => (
-                <button key={r.key} disabled={busy} onClick={() => void launch(r.key)}>
-                  <FolderOpen size={18} />
-                  <span>
-                    {r.name}
-                    <small>点击打开或重新授权</small>
-                  </span>
-                  <ArrowUpRight size={16} />
+          {migrationRecovery ? (
+            <section className="migration-review" aria-labelledby="migration-recovery-title">
+              <span className="eyebrow">恢复已确认的工作空间升级</span>
+              <h1 id="migration-recovery-title">升级过程曾中断</h1>
+              <p className="lead">
+                “{migrationRecovery.workspaceName}”的升级事务仍保存在本地。可以完成这次已确认的升级
+                {migrationRecovery.phase === 'prepared'
+                  ? '，或回退本次升级并返回预览'
+                  : '。该事务已提交，只能完成清理'}
+                。
+              </p>
+              {message && (
+                <p className="notice" role="alert">
+                  {message}
+                </p>
+              )}
+              <div className="launch-actions">
+                <button
+                  className="primary large"
+                  disabled={busy}
+                  onClick={() =>
+                    void (async () => {
+                      setBusy(true);
+                      const result = await api.recoverSchemaMigration('finish');
+                      if (result.ok && result.value.kind === 'opened') {
+                        setView(result.value.view);
+                        setMigrationRecovery(null);
+                        useEditorStore.getState().load(null);
+                        navigate('/');
+                      } else if (!result.ok) setMessage(result.error.message);
+                      setBusy(false);
+                    })()
+                  }
+                >
+                  完成升级
                 </button>
-              ))}
+                {migrationRecovery.phase === 'prepared' && (
+                  <button
+                    className="large"
+                    disabled={busy}
+                    onClick={() =>
+                      void (async () => {
+                        setBusy(true);
+                        const result = await api.recoverSchemaMigration('rollback');
+                        if (result.ok && result.value.kind === 'preview') {
+                          setMigrationRecovery(null);
+                          setMigrationPreview(result.value.preview);
+                          setMigrationChoices({});
+                        } else if (!result.ok) setMessage(result.error.message);
+                        setBusy(false);
+                      })()
+                    }
+                  >
+                    回退并重新预览
+                  </button>
+                )}
+              </div>
             </section>
+          ) : migrationPreview ? (
+            <section className="migration-review" aria-labelledby="migration-title">
+              <span className="eyebrow">工作空间格式升级</span>
+              <h1 id="migration-title">确认状态归并</h1>
+              <p className="lead">
+                “{migrationPreview.workspaceName}
+                ”将升级到新版格式。确认后会通过可恢复的本地事务更新应用数据；取消不会改动原文件。
+              </p>
+              <div className="migration-counts">
+                {Object.entries(migrationPreview.counts).map(([status, count]) => (
+                  <span key={status}>
+                    {migrationStatusLabel(status)} · {count}
+                  </span>
+                ))}
+              </div>
+              {migrationPreview.archivedPrompts.length > 0 && (
+                <div className="migration-choices">
+                  <h2>选择旧归档提示词的新状态</h2>
+                  {migrationPreview.archivedPrompts.map((item) => {
+                    const key = archivedChoiceKey(item.projectId, item.promptId);
+                    return (
+                      <label key={key}>
+                        <span>
+                          {item.title}
+                          <small>{item.promptId}</small>
+                        </span>
+                        <select
+                          aria-label={`${item.promptId} 的迁移状态`}
+                          value={migrationChoices[key] ?? ''}
+                          onChange={(event) =>
+                            setMigrationChoices((current) => ({
+                              ...current,
+                              [key]: event.target.value as PromptStatus,
+                            }))
+                          }
+                        >
+                          <option value="" disabled>
+                            请选择
+                          </option>
+                          <option value="draft">草稿</option>
+                          <option value="ready">待提交</option>
+                          <option value="completed">已完成</option>
+                        </select>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              {message && (
+                <p className="notice" role="alert">
+                  {message}
+                </p>
+              )}
+              <div className="launch-actions">
+                <button
+                  className="primary large"
+                  disabled={
+                    busy ||
+                    migrationPreview.archivedPrompts.some(
+                      (item) => !migrationChoices[archivedChoiceKey(item.projectId, item.promptId)],
+                    )
+                  }
+                  onClick={() =>
+                    void (async () => {
+                      setBusy(true);
+                      const result = await api.confirmSchemaMigration(migrationChoices);
+                      const migrated = consume(result);
+                      if (migrated) {
+                        setView(migrated);
+                        setMigrationPreview(null);
+                        useEditorStore.getState().load(null);
+                        navigate('/');
+                      } else {
+                        const recovery = api.migrationRecovery();
+                        if (recovery) {
+                          setMigrationRecovery(recovery);
+                          setMigrationPreview(null);
+                        }
+                      }
+                      setBusy(false);
+                    })()
+                  }
+                >
+                  确认升级并打开
+                </button>
+                <button
+                  className="large"
+                  disabled={busy}
+                  onClick={() => {
+                    api.cancelSchemaMigration();
+                    setMigrationPreview(null);
+                    setMessage('');
+                  }}
+                >
+                  取消
+                </button>
+              </div>
+            </section>
+          ) : (
+            <>
+              <span className="eyebrow">
+                <span className="dot" />
+                YOUR LOCAL PROMPT WORKSPACE
+              </span>
+              <h1>
+                先写好，
+                <br />
+                再出发<span className="accent">。</span>
+              </h1>
+              <p className="lead">
+                给思考一个安全的地方。
+                <br />
+                整理项目、准备下一步，让每一条提示词都有迹可循。
+              </p>
+              <div className="launch-actions">
+                <button
+                  className="primary large"
+                  disabled={busy || !api.supported()}
+                  onClick={() => void launch()}
+                >
+                  <FolderOpen size={19} />
+                  打开已有工作空间
+                  <ArrowUpRight size={17} />
+                </button>
+                <button
+                  className="large"
+                  disabled={busy || !api.supported()}
+                  onClick={() => void startCreation()}
+                >
+                  <Plus size={19} />
+                  创建新工作空间
+                </button>
+              </div>
+              {!api.supported() && (
+                <p className="notice">
+                  请使用桌面 Chrome 或 Edge，通过 HTTPS 或 localhost 打开以访问本地目录。
+                </p>
+              )}
+              {message && (
+                <p className="notice" role="alert">
+                  {message}
+                </p>
+              )}
+              {!api.cacheAvailable && (
+                <p className="notice">浏览器缓存不可用，可通过选择目录继续使用。</p>
+              )}
+              {recents.length > 0 && (
+                <section className="recent">
+                  <h2>最近使用</h2>
+                  {recents.map((r) => (
+                    <button key={r.key} disabled={busy} onClick={() => void launch(r.key)}>
+                      <FolderOpen size={18} />
+                      <span>
+                        {r.name}
+                        <small>点击打开或重新授权</small>
+                      </span>
+                      <ArrowUpRight size={16} />
+                    </button>
+                  ))}
+                </section>
+              )}
+              <div className="privacy-note">
+                <ShieldCheck size={18} />
+                <span>数据留在你的文件夹里 · 无需账号 · 不上传提示词</span>
+              </div>
+            </>
           )}
-          <div className="privacy-note">
-            <ShieldCheck size={18} />
-            <span>数据留在你的文件夹里 · 无需账号 · 不上传提示词</span>
-          </div>
         </main>
         <aside className="launcher-art" aria-hidden="true">
           <div className="art-label">A LITTLE SPACE FOR BIG IDEAS</div>
@@ -693,21 +985,35 @@ export function App() {
     );
 
   return (
-    <div className="workspace-app">
+    <div className={`workspace-app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
-        <a
-          className="brand"
-          href="#/"
-          onClick={(event) => {
-            event.preventDefault();
-            void go('/');
-          }}
-        >
-          <span className="logo">
-            <FileText size={19} />
-          </span>
-          PromptDesk
-        </a>
+        <div className="sidebar-brand-row">
+          <a
+            className="brand"
+            href="#/"
+            onClick={(event) => {
+              event.preventDefault();
+              void go('/');
+            }}
+          >
+            <span className="logo">
+              <FileText size={19} />
+            </span>
+            <span className="brand-label">PromptDesk</span>
+          </a>
+          <button
+            className="sidebar-toggle"
+            aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+            aria-expanded={!sidebarCollapsed}
+            onClick={() => {
+              const collapsed = !sidebarCollapsed;
+              setSidebarCollapsed(collapsed);
+              void api.setUIPreference('sidebarCollapsed', String(collapsed));
+            }}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
+        </div>
         <div className="workspace-name">
           <FolderOpen size={16} />
           <span>{view.workspace.name}</span>
@@ -767,7 +1073,7 @@ export function App() {
       </aside>
       <div className="workspace-content">
         <header className="topbar">
-          <span>
+          <span className="topbar-title">
             {project?.name ??
               (location.pathname === '/settings'
                 ? '设置'
@@ -777,7 +1083,18 @@ export function App() {
                     ? '已删除'
                     : '我的工作台')}
           </span>
-          <span className="beta">开发预览</span>
+          <div className="topbar-actions">
+            {project && (
+              <button
+                aria-label="重命名项目"
+                disabled={busy || !view.writable || project.status === 'archived'}
+                onClick={() => setDialog({ kind: 'project', name: project.name, id: project.id })}
+              >
+                修改项目名称
+              </button>
+            )}
+            <span className="beta">开发预览</span>
+          </div>
         </header>
         {protectedDraft?.sessionId === view.sessionId && (
           <div className="notice">
@@ -964,7 +1281,7 @@ export function App() {
             <h1>让下一步，清晰可见。</h1>
             <p className="muted">在这里准备、组织和追踪你的提示词。</p>
             <div className="stat-grid">
-              {(['ready', 'submitted', 'waiting', 'draft'] as const).map((s) => (
+              {(['draft', 'ready', 'completed'] as const).map((s) => (
                 <div key={s}>
                   <span className={`status-dot ${s}`} />
                   <span>{statusLabels[s]}</span>
@@ -1060,11 +1377,35 @@ export function App() {
                   列表
                 </button>
               </div>
+              <div className="prompt-bucket-tabs" role="tablist" aria-label="提示词分组">
+                <button
+                  role="tab"
+                  aria-selected={!showCompleted}
+                  className={!showCompleted ? 'active' : ''}
+                  onClick={() => setShowCompleted(false)}
+                >
+                  待办 {activePrompts.length}
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={showCompleted}
+                  className={showCompleted ? 'active' : ''}
+                  onClick={() => setShowCompleted(true)}
+                >
+                  已完成 {completedPrompts.length}
+                </button>
+              </div>
               <div className={listView ? 'prompt-items' : 'prompt-items flow'}>
                 {visiblePrompts.map((p) => (
                   <div
                     className={`prompt-card ${doc?.meta.id === p.id && doc.meta.projectId === p.projectId ? 'active' : ''}`}
                     key={p.id}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourceId = event.dataTransfer.getData('text/promptdesk-id');
+                      if (sourceId) void movePromptBefore(sourceId, p.id);
+                    }}
                   >
                     <span className={`status-dot ${p.status}`} />
                     <div>
@@ -1079,25 +1420,50 @@ export function App() {
                         </small>
                         <h3>{p.title}</h3>
                       </button>
-                      <select
-                        className={`status-label ${p.status}`}
-                        aria-label={`${p.id} 列表状态`}
-                        value={p.status}
-                        disabled={busy || !view.writable || project.status === 'archived'}
-                        onChange={(event) =>
-                          void changeListedStatus(
-                            p.projectId,
-                            p.id,
-                            statusSchema.parse(event.target.value),
-                          )
-                        }
-                      >
-                        {statusSchema.options.map((s) => (
-                          <option key={s} value={s}>
-                            {statusLabels[s]}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="prompt-card-controls">
+                        <label className="todo-toggle">
+                          <input
+                            type="checkbox"
+                            aria-label={`${p.id} 标记已完成`}
+                            checked={p.status === 'completed'}
+                            disabled={busy || !view.writable || project.status === 'archived'}
+                            onChange={(event) => {
+                              const previous = p.statusHistory.at(-1)?.from;
+                              const nextStatus = event.target.checked
+                                ? 'completed'
+                                : previous && previous !== 'completed'
+                                  ? previous
+                                  : 'draft';
+                              void changeListedStatus(p.projectId, p.id, nextStatus);
+                            }}
+                          />
+                          <span className={`status-label ${p.status}`}>
+                            {statusLabels[p.status]}
+                          </span>
+                        </label>
+                        <select
+                          aria-label={`${p.id} 优先级`}
+                          value={p.priority}
+                          disabled={busy || !view.writable || project.status === 'archived'}
+                          onChange={(event) => {
+                            const priority = prioritySchema.parse(event.target.value);
+                            void api
+                              .run((runtime) =>
+                                runtime.updatePrompt(p.projectId, p.id, { priority }),
+                              )
+                              .then((result) => {
+                                const updated = consume(result);
+                                if (updated) updateView();
+                              });
+                          }}
+                        >
+                          {prioritySchema.options.map((priority) => (
+                            <option key={priority} value={priority}>
+                              {priorityLabels[priority]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       {p.parentPromptId && (
                         <small className="parent-label">
                           前置 {p.parentPromptId}
@@ -1111,35 +1477,27 @@ export function App() {
                       )}
                       <div className="order-controls">
                         <button
-                          aria-label={`上移 ${p.id}`}
+                          aria-label={`拖动排序 ${p.id}`}
+                          title="拖动调整顺序；也可按 Alt+↑/↓"
+                          draggable
                           disabled={
-                            busy ||
-                            !view.writable ||
-                            project.status === 'archived' ||
-                            p.status === 'archived' ||
-                            !!query ||
-                            p.order === 1
+                            busy || !view.writable || project.status === 'archived' || !!query
                           }
-                          onClick={() => void movePrompt(p.id, -1)}
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData('text/promptdesk-id', p.id);
+                            event.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.altKey && event.key === 'ArrowUp') {
+                              event.preventDefault();
+                              void movePrompt(p.id, -1);
+                            } else if (event.altKey && event.key === 'ArrowDown') {
+                              event.preventDefault();
+                              void movePrompt(p.id, 1);
+                            }
+                          }}
                         >
-                          ↑
-                        </button>
-                        <button
-                          aria-label={`下移 ${p.id}`}
-                          disabled={
-                            busy ||
-                            !view.writable ||
-                            project.status === 'archived' ||
-                            p.status === 'archived' ||
-                            !!query ||
-                            p.order ===
-                              view.prompts.filter(
-                                (item) => item.projectId === project.id && !item.deletedAt,
-                              ).length
-                          }
-                          onClick={() => void movePrompt(p.id, 1)}
-                        >
-                          ↓
+                          <GripVertical size={16} />
                         </button>
                       </div>
                     </div>
@@ -1148,7 +1506,13 @@ export function App() {
                 {!visiblePrompts.length && (
                   <div className="list-empty">
                     <FileText size={26} />
-                    <p>{query ? '没有匹配的 Prompt' : '先准备一条提示词吧。'}</p>
+                    <p>
+                      {query
+                        ? '没有匹配的 Prompt'
+                        : showCompleted
+                          ? '还没有已完成的提示词。'
+                          : '先准备一条提示词吧。'}
+                    </p>
                   </div>
                 )}
               </div>
@@ -1158,12 +1522,6 @@ export function App() {
                   onClick={() => setDetails('project')}
                 >
                   项目资料
-                </button>
-                <button
-                  disabled={busy || !view.writable || project.status === 'archived'}
-                  onClick={() => setDialog({ kind: 'project', name: project.name, id: project.id })}
-                >
-                  重命名
                 </button>
                 <button
                   disabled={!view.writable}
@@ -1215,6 +1573,19 @@ export function App() {
                       </select>
                       <span>{doc.meta.target}</span>
                       <span>V{doc.meta.currentVersion}</span>
+                      <button
+                        className="copy-prompt-top"
+                        onClick={() =>
+                          void copyText(editor.body).then((result) =>
+                            setMessage(
+                              result.ok ? '已复制，状态未改变。' : '复制失败，请选中文本手动复制。',
+                            ),
+                          )
+                        }
+                      >
+                        <Copy size={14} />
+                        复制 Prompt
+                      </button>
                       {doc.meta.submittedVersion && (
                         <span>已提交 V{doc.meta.submittedVersion}</span>
                       )}
@@ -1279,6 +1650,26 @@ export function App() {
                         body={editor.body}
                         readonly={readonly}
                         onChange={useEditorStore.getState().edit}
+                        onSplitSelection={(selected, from, to) =>
+                          void (async () => {
+                            if (!(await flush())) return;
+                            const body = useEditorStore.getState().body;
+                            if (body.slice(from, to) !== selected) return;
+                            const originalBody = body.slice(0, from) + body.slice(to);
+                            if (!originalBody.trim() || !selected.trim()) {
+                              setMessage('拆分后两条 Prompt 都需要保留正文。');
+                              return;
+                            }
+                            setDialog({
+                              kind: 'split-prompt',
+                              name: `${doc.meta.title}（拆分）`.slice(0, 200),
+                              projectId: doc.meta.projectId,
+                              id: doc.meta.id,
+                              originalBody,
+                              newBody: selected,
+                            });
+                          })()
+                        }
                       />
                     )}
                   </Suspense>
@@ -1309,53 +1700,6 @@ export function App() {
                         onClick={() => void createPrompt(project.id, doc.meta.id)}
                       >
                         下一条
-                      </button>
-                      {doc.meta.status === 'submitted' && (
-                        <button
-                          disabled={readonly}
-                          onClick={() =>
-                            void (async () => {
-                              setBusy(true);
-                              try {
-                                if (!(await flush())) return;
-                                const state = useEditorStore.getState();
-                                const next = consume(
-                                  await api.run((runtime) =>
-                                    runtime.checkpoint(
-                                      project.id,
-                                      doc.meta.id,
-                                      state.body,
-                                      'submitted',
-                                      true,
-                                    ),
-                                  ),
-                                );
-                                if (next) {
-                                  useEditorStore.getState().load(next);
-                                  updateView();
-                                  setMessage('已记录再次提交');
-                                }
-                              } finally {
-                                setBusy(false);
-                              }
-                            })()
-                          }
-                        >
-                          再次标记提交
-                        </button>
-                      )}
-                      <button
-                        className="primary"
-                        onClick={() =>
-                          void copyText(editor.body).then((result) =>
-                            setMessage(
-                              result.ok ? '已复制，状态未改变。' : '复制失败，请选中文本手动复制。',
-                            ),
-                          )
-                        }
-                      >
-                        <Copy size={16} />
-                        复制 Prompt
                       </button>
                     </div>
                   </div>
@@ -1406,7 +1750,6 @@ export function App() {
                             <li key={event.id}>
                               {event.from ? statusLabels[event.from] : '创建'} →{' '}
                               {statusLabels[event.to]} · {new Date(event.at).toLocaleString()}
-                              {event.kind === 'resubmit' ? ' · 再次提交' : ''}
                               {event.versionNumber ? ` · V${event.versionNumber}` : ''}
                             </li>
                           ))}

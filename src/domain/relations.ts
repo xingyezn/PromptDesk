@@ -1,14 +1,17 @@
 import type { PromptMeta } from './schemas';
 export function invalidPromptRelations(
-  prompts: readonly PromptMeta[],
+  prompts: readonly Pick<
+    PromptMeta,
+    'id' | 'projectId' | 'parentPromptId' | 'deletedAt' | 'order'
+  >[],
   incompleteProjectIds: ReadonlySet<string> = new Set(),
 ): Set<string> {
   const invalid = new Set<string>();
-  const key = (prompt: PromptMeta) => `${prompt.projectId}:${prompt.id}`;
+  const key = (prompt: (typeof prompts)[number]) => `${prompt.projectId}:${prompt.id}`;
   const byKey = new Map(prompts.map((prompt) => [key(prompt), prompt]));
   for (const prompt of prompts) {
     const visited = new Set<string>();
-    let current: PromptMeta | undefined = prompt;
+    let current: (typeof prompts)[number] | undefined = prompt;
     while (current?.parentPromptId) {
       const currentKey = key(current);
       if (visited.has(currentKey)) {

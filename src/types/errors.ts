@@ -14,7 +14,8 @@ export type ErrorCode =
   | 'PATH_INVALID'
   | 'TRANSFER_LIMIT'
   | 'UNRECOGNIZED_FILES'
-  | 'DESTINATION_NOT_EMPTY';
+  | 'DESTINATION_NOT_EMPTY'
+  | 'MIGRATION_REQUIRED';
 
 const messages: Record<ErrorCode, string> = {
   TRANSFER_LIMIT:
@@ -22,6 +23,7 @@ const messages: Record<ErrorCode, string> = {
   UNRECOGNIZED_FILES:
     '应用数据目录内有无法识别的文件，已停止打包或迁移以免遗漏。请先检查目录；根目录的其他资料不受影响。',
   DESTINATION_NOT_EMPTY: '迁移目标必须是空文件夹，请重新选择。原工作空间保持不变。',
+  MIGRATION_REQUIRED: '此工作空间需要确认数据格式升级后才能打开。',
   UNSUPPORTED: '请使用安全连接下的桌面 Chrome 或 Edge 打开本地工作空间。',
   CANCELLED: '已取消操作。',
   PERMISSION_DENIED: '目录访问权限不可用。请重新授权或重新选择目录，未保存内容仍保留。',

@@ -28,31 +28,31 @@ describe('local workspace integration', () => {
     await runtime.saveDraft(project.id, prompt.id, 'abc');
     const ready = await runtime.checkpoint(project.id, prompt.id, 'abc', 'ready');
     expect(ready.meta.currentVersion).toBe(1);
-    const submitted = await runtime.checkpoint(project.id, prompt.id, 'abc', 'submitted');
+    const submitted = await runtime.checkpoint(project.id, prompt.id, 'abc', 'ready');
     expect(submitted.meta.currentVersion).toBe(1);
-    expect(submitted.meta.submittedVersion).toBe(1);
+    expect(submitted.meta.submittedVersion).toBeNull();
     const draft = await runtime.saveDraft(project.id, prompt.id, 'changed');
-    expect(draft.meta.submittedVersion).toBe(1);
-    expect(draft.meta.status).toBe('submitted');
+    expect(draft.meta.submittedVersion).toBeNull();
+    expect(draft.meta.status).toBe('ready');
     await runtime.checkpoint(project.id, prompt.id, 'changed', 'draft');
     expect(runtime.view().prompts[0]?.status).toBe('draft');
   });
   it('protects current draft before restoring history, without changing submitted state', async () => {
     const { runtime, project, prompt } = await fixture();
     await runtime.checkpoint(project.id, prompt.id, 'first', 'ready');
-    await runtime.checkpoint(project.id, prompt.id, 'second', 'submitted');
+    await runtime.checkpoint(project.id, prompt.id, 'second', 'ready');
     await runtime.saveDraft(project.id, prompt.id, 'unsaved checkpoint content');
     const restored = await runtime.restore(project.id, prompt.id, 1, 'unsaved checkpoint content');
     expect(restored.body).toBe('first');
-    expect(restored.meta.status).toBe('submitted');
-    expect(restored.meta.submittedVersion).toBe(2);
+    expect(restored.meta.status).toBe('ready');
+    expect(restored.meta.submittedVersion).toBeNull();
     expect(restored.meta.currentVersion).toBe(4);
     expect(await runtime.readVersion(project.id, prompt.id, 3)).toBe('unsaved checkpoint content');
     expect(await runtime.readVersion(project.id, prompt.id, 2)).toBe('second');
   });
   it('rejects empty submission and keeps the original state', async () => {
     const { runtime, project, prompt } = await fixture();
-    await expect(runtime.checkpoint(project.id, prompt.id, '  ', 'submitted')).rejects.toThrow();
+    await expect(runtime.checkpoint(project.id, prompt.id, '  ', 'ready')).rejects.toThrow();
     expect(runtime.view().prompts[0]?.status).toBe('draft');
   });
   it('detects external edits and preserves disk content', async () => {

@@ -12,21 +12,16 @@ async function fixture() {
   return { fs, runtime, project, first };
 }
 describe('complete local planning workflow', () => {
-  it('resubmits a changed body without rewriting the first submission timestamp', async () => {
+  it('creates checkpoints when moving through the supported prompt statuses', async () => {
     const { runtime, project, first } = await fixture();
     await runtime.openPrompt(project.id, first.id);
-    const submitted = await runtime.checkpoint(project.id, first.id, '合成首次提交', 'submitted');
-    const resubmitted = await runtime.checkpoint(
-      project.id,
-      first.id,
-      '合成第二次提交',
-      'submitted',
-      true,
-    );
-    expect(resubmitted.meta.submittedAt).toBe(submitted.meta.submittedAt);
-    expect(resubmitted.meta.submittedVersion).toBe(2);
-    expect(resubmitted.meta.statusHistory.at(-1)?.kind).toBe('resubmit');
-    expect(await runtime.readVersion(project.id, first.id, 1)).toBe('合成首次提交');
+    const ready = await runtime.checkpoint(project.id, first.id, '合成待提交', 'ready');
+    const completed = await runtime.checkpoint(project.id, first.id, '合成已完成', 'completed');
+    expect(completed.meta.status).toBe('completed');
+    expect(completed.meta.statusHistory.at(-1)?.kind).toBe('transition');
+    expect(completed.meta.currentVersion).toBe(2);
+    expect(ready.meta.submittedVersion).toBeNull();
+    expect(await runtime.readVersion(project.id, first.id, 1)).toBe('合成待提交');
   });
   it('checks external root settings before child writes and does not replace the baseline on inspection', async () => {
     const { fs, runtime, project, first } = await fixture();
@@ -74,6 +69,36 @@ describe('complete local planning workflow', () => {
     expect(ordered(runtime.view().prompts.filter((p) => !p.deletedAt)).map((p) => p.order)).toEqual(
       [1, 2, 3],
     );
+  });
+  it('splits selected text into a related prompt in one recoverable workspace transaction', async () => {
+    const { fs, runtime, project, first } = await fixture();
+    await runtime.openPrompt(project.id, first.id);
+    await runtime.saveDraft(project.id, first.id, '保留在原项的内容');
+    fs.fail = (path) => path === `projects/${project.slug}/prompts/P002/meta.json`;
+    await expect(
+      runtime.splitPrompt(project.id, first.id, '原项余文', '合成拆分项', '选中的新内容'),
+    ).rejects.toThrow();
+    fs.fail = null;
+    const reopened = await WorkspaceRuntime.open(fs);
+    const pending = await reopened.load();
+    expect(pending.pending).toHaveLength(1);
+    await reopened.recover(pending.pending[0]!.operationId, 'finish');
+    const created = reopened.view().prompts.find((item) => item.id === 'P002')!;
+    expect(created.title).toBe('合成拆分项');
+    expect(created.parentPromptId).toBe(first.id);
+    expect(created.order).toBe(first.order + 1);
+    expect((await reopened.openPrompt(project.id, first.id)).body).toBe('原项余文');
+    expect((await reopened.openPrompt(project.id, created.id)).body).toBe('选中的新内容');
+  });
+  it('persists priority separately from manual order across workspace reopen', async () => {
+    const { fs, runtime, project, first } = await fixture();
+    const second = await runtime.createPrompt(project.id);
+    await runtime.updatePrompt(project.id, first.id, { priority: 'high' });
+    await runtime.reorder(project.id, [second.id, first.id]);
+    const reopened = await WorkspaceRuntime.open(fs);
+    const view = await reopened.load();
+    expect(view.prompts.find((item) => item.id === first.id)?.priority).toBe('high');
+    expect(ordered(view.prompts).map((item) => item.id)).toEqual([second.id, first.id]);
   });
   it('recovers interrupted reorder without publishing partial order', async () => {
     const { fs, runtime, project, first } = await fixture();

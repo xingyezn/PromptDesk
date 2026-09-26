@@ -174,6 +174,9 @@ interface WorkspaceService {
   authorize(sessionId: string): Promise<Result<void>>;
   refresh(sessionId: string): Promise<Result<LoadReport>>;
   close(sessionId: string): Promise<Result<void>>;
+  previewSchemaMigration(): Promise<Result<SchemaMigrationPreview>>;
+  confirmSchemaMigration(choices: ArchivedPromptChoices): Promise<Result<WorkspaceSession>>;
+  recoverSchemaMigration(choice: 'finish' | 'rollback'): Promise<Result<MigrationRecoveryResult>>;
 }
 interface ProjectService {
   list(sessionId: string): Promise<Result<ProjectSummary[]>>;
@@ -204,6 +207,12 @@ interface PromptService {
     body: string,
   ): Promise<Result<PromptMeta>>;
   createNext(sessionId: string, ref: PromptRef): Promise<Result<PromptMeta>>;
+  split(
+    sessionId: string,
+    ref: PromptRef,
+    originalBody: string,
+    newPrompt: { title: string; body: string },
+  ): Promise<Result<PromptMeta>>;
   reorder(sessionId: string, projectId: string, ids: string[]): Promise<Result<void>>;
   setDeleted(sessionId: string, ref: PromptRef, deleted: boolean): Promise<Result<PromptMeta>>;
 }
@@ -238,6 +247,21 @@ interface CachePort {
 }
 ```
 
+```ts
+type ArchivedPromptChoices = Record<string, PromptStatus>;
+interface SchemaMigrationPreview {
+  workspaceId: string;
+  workspaceName: string;
+  counts: Record<string, number>;
+  archivedPrompts: { projectId: string; promptId: string; title: string }[];
+  sourceFingerprint: string;
+}
+type MigrationRecoveryResult =
+  { kind: 'opened'; view: WorkspaceSession } | { kind: 'preview'; preview: SchemaMigrationPreview };
+```
+
+状态迁移、拆分与排序仍由 WorkspaceRuntime 的同一写队列和 Journal 提交；`PromptPatch` 白名单包含 `priority`，绝不包含 id、order、statusHistory、schemaVersion 或 versions。拆分在 UI 只负责从编辑器选区构造保留正文和新正文，确认后由 service 一次写入两条正文/元数据、父子关联和 order 调整。迁移预览 DTO 只携带状态计数、待选择 Prompt 标识/标题和无正文的源指纹；句柄只保留在适配器/controller。
+
 DirectoryRef、ChangeSet、加载摘要、输入 DTO 均在实现时补全：DirectoryRef 为适配器内注册的句柄引用；ChangeSet 为 operationId、相对路径、before/after 内容和 expected 指纹集合；CommitReceipt 为 operationId 与各文件新指纹。所有 patch 使用字段白名单，不能让 UI 修改 id、slug、schemaVersion、版本编号或历史数组。removeGeneratedFile 只允许事务回退删除本次创建且 hash 匹配的应用文件；cleanupPending 只处理经验证的该 operation 暂存目录，二者不得作为 UI 删除接口。
 
 Permission 调用与目录选择必须从明确点击入口进入。点击前预先读取 recent 句柄；不要在 await 网络或异步准备后才启动需要用户激活的 API。授权策略依据 [Chrome 官方文件访问文档](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access)。
@@ -254,7 +278,7 @@ Permission 调用与目录选择必须从明确点击入口进入。点击前预
 
 Recent 恢复：queryPermission(readwrite) granted 才进入可写；prompt 提供点击授权；denied 提供重新选择。只读权限有效但写权限拒绝时可显式进入只读。每次实际读取/写入都处理权限异常，启动时 granted 不等于永久有效。句柄失效可重新选择，重新校验 manifest，使用 isSameEntry（适用时）区分同目录和拷贝目录。相同 workspaceId 不同句柄不自动替换；显示副本选择并以 recentKey 分别保存。
 
-高 schemaVersion 拒绝写；V0.1 只支持 schemaVersion=1，不实现静默迁移。关闭/切换先暂停编辑、flush 防抖、drain 队列。失败时保留原会话，让用户重试或显式保留未保存副本后离开；旧会话回调不能污染新会话。
+当前 Workspace schema 为 v2。v1 打开时先取写锁并校验只读迁移预览；显示状态映射及旧 archived Prompt 的逐项选择，确认后经 pending migration 事务升级。取消不写盘；确认中断保留恢复记录。高于 v2 的 schema 拒绝写入，不自动降级。关闭/切换先暂停编辑、flush 防抖、drain 队列。失败时保留原会话，让用户重试或显式保留未保存副本后离开；旧会话回调不能污染新会话。
 
 ## 5. 自动保存、事务与崩溃恢复
 
@@ -290,9 +314,9 @@ V0.1 需要最小可恢复协议，而非声称全盘原子性：
 
 ## 6. 状态及版本操作
 
-所有状态按钮调用 PromptService.transition；手动任意状态切换合法，但需要满足 DATA_SCHEMA 的归档、删除、非空提交限制。正文编辑不自动改变状态。ready、submitted 的检查点必须先写入成功，再提交状态元数据；失败时状态保持原值。
+所有状态按钮调用统一状态 use case；当前值仅 `draft | ready | completed`，允许人工任意跳转。待办 checkbox 直接切换 completed，并分组展示完成项。进入 ready/completed 前正文非空，检查点与状态经同一事务提交；失败时状态保持原值。状态副作用在 domain policy/service 中集中实现，复制与状态完全独立。
 
-显式保存版本冻结当前正文；正文与最新版本完全相同则复用，不制造重复。首次和后续进入 submitted 都引用确切提交快照；重新提交相同状态需要单独“再次标记提交”动作，复用/创建版本并增加事件。恢复不覆盖任何历史文件：先保存当前草稿检查点（若变化），再创建恢复检查点，写 current.md；状态保持原值，提示用户自行决定是否重开任务。规则详见 DATA_SCHEMA。
+显式保存版本冻结当前正文；正文与最新版本完全相同则复用，不制造重复。同状态但正文有变化时可创建新检查点，不追加重复状态事件。恢复不覆盖任何历史文件：先保存当前草稿检查点（若变化），再创建恢复检查点，写 current.md；状态保持原值，提示用户自行决定是否重开任务。规则详见 DATA_SCHEMA。
 
 Project/Prompt 删除前应用内确认，事务写 deletedAt，不搬动文件。恢复清除 deletedAt；Project 删除后其 Prompt 全部隐藏但不逐条改状态，恢复 Project 保留各 Prompt 原来的删除标记。归档 Project 对子 Prompt 只读；不级联改 Prompt.status。
 
@@ -335,7 +359,7 @@ SearchService：初始索引标题、项目名、标签；后台读当前正文�
 
 Launcher、Dashboard、Project Workspace（三栏）、Prompt Editor、Version History、Settings；Scratchpad 和已删除列表可作为主界面内视图。1024px 及以上完整编辑，窄屏折叠栏，手机基础查看。Flow 为按 order 排列的线性列表，parent 用文本标识，不实现 DAG。
 
-Dashboard 根据文件元数据统计 ready/submitted/waiting/draft，排除归档/删除项目与 Prompt；队列以状态优先 ready→submitted→waiting→draft，再按项目名、order、ID 稳定排序。“下一条”取首个 ready，无 ready 则首个 draft，否则显示无待办。最近项目来自 UI 偏好，不改业务排序。
+Dashboard 根据文件元数据统计 draft/ready/completed，排除归档/删除项目与 Prompt。项目 Prompt 列表默认显示未完成项，completed 在单独分组；拖拽写入 order，priority 独立显示且不重排用户指定次序。“下一条”优先取 ready，再取 draft。最近项目来自 UI 偏好，不改业务排序。侧栏折叠状态属于 IndexedDB UI preference。
 
 快捷键：Ctrl/Cmd+S 保存版本；Ctrl/Cmd+Shift+C 复制；Ctrl/Cmd+K 搜索；Ctrl/Cmd+N 新建 Prompt（浏览器可能占用，按钮始终可用）。只在应用有焦点、正确作用域、非 IME composition 时触发；Enter、Ctrl/Cmd+Enter 都不提交，不拦截中文输入确认键。
 
@@ -356,7 +380,7 @@ npm install -D vitest jsdom @testing-library/react @testing-library/user-event @
 npm install -D fake-indexeddb @playwright/test
 ```
 
-CSS 默认使用 CSS Modules + CSS variables，避免为主题增加复杂依赖。Tailwind 是 PRD 的建议选项，不是硬约束；如选用必须记录版本及插件配置，不混合多个样式体系。V0.1 不需要 diff、拖拽框架、PWA、完整 tokenizer 或全文检索服务；排序可用上下移动按钮。
+CSS 默认使用 CSS Modules + CSS variables，避免为主题增加复杂依赖。Tailwind 是 PRD 的建议选项，不是硬约束；如选用必须记录版本及插件配置，不混合多个样式体系。V0.1 不需要 diff、拖拽框架、PWA、完整 tokenizer 或全文检索服务；排序使用原生拖拽并保留键盘替代操作。
 
 package.json 初始核心字段（依赖部分通过上面的安装命令写入）：
 

@@ -17,7 +17,7 @@ async function fixture() {
   const prompt = await runtime.createPrompt(project.id);
   const root = promptPath(project.slug, prompt.id);
   await runtime.openPrompt(project.id, prompt.id);
-  await runtime.checkpoint(project.id, prompt.id, '合成第一版\n正文', 'submitted');
+  await runtime.checkpoint(project.id, prompt.id, '合成第一版\n正文', 'ready');
   await runtime.saveDraft(project.id, prompt.id, '合成当前草稿');
   return { fs, runtime, project, prompt, root };
 }
@@ -97,7 +97,7 @@ describe('settings, list states and workspace transfer', () => {
     await expect(runtime.transitionStoredPrompt(project.id, prompt.id, 'ready')).rejects.toThrow(
       '外部修改',
     );
-    expect(runtime.view().prompts[0]?.status).toBe('submitted');
+    expect(runtime.view().prompts[0]?.status).toBe('ready');
   });
   it('packs deleted prompts, immutable versions, optional files, and settings without unrelated root data', async () => {
     const { fs, runtime, project, prompt, root } = await fixture();

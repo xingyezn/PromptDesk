@@ -12,6 +12,12 @@ test('metadata, next prompt, ordering, queue search and scratchpad transfer stay
   await page.getByRole('button', { name: '创建项目', exact: true }).click();
   await page.getByLabel('名称', { exact: true }).fill('合成规划项目');
   await page.getByRole('button', { name: '确认', exact: true }).click();
+  await page.getByRole('button', { name: '收起侧边栏', exact: true }).click();
+  await expect(page.locator('.sidebar')).toHaveCSS('width', '70px');
+  await page.getByRole('button', { name: '展开侧边栏', exact: true }).click();
+  await page.getByRole('button', { name: '重命名项目', exact: true }).click();
+  await expect(page.getByLabel('名称', { exact: true })).toHaveValue('合成规划项目');
+  await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '新建 Prompt', exact: true }).last().click();
   const body = page.getByRole('textbox', { name: 'Prompt 正文' });
   await body.fill('合成第一条正文');
@@ -27,7 +33,9 @@ test('metadata, next prompt, ordering, queue search and scratchpad transfer stay
   await expect(page.getByText('P002 / PROMPT', { exact: true })).toBeVisible();
   await expect(page.getByText('前置 P001', { exact: true })).toBeVisible();
   await body.fill('合成第二条 正文专属检索词');
-  await page.getByRole('button', { name: '上移 P002', exact: true }).click();
+  await page
+    .getByRole('button', { name: '拖动排序 P002', exact: true })
+    .dragTo(page.getByRole('button', { name: '拖动排序 P001', exact: true }));
   await expect(page.locator('.prompt-open').first()).toContainText('P002');
   await page.getByRole('button', { name: '项目资料', exact: true }).click();
   await page.getByLabel('项目说明', { exact: true }).fill('合成完整规划');
@@ -39,10 +47,8 @@ test('metadata, next prompt, ordering, queue search and scratchpad transfer stay
   await page.getByRole('button', { name: '建立全文索引', exact: true }).click();
   await expect(page.getByText('全文索引 2/2 · 已完成', { exact: true })).toBeVisible();
   await expect(page.locator('.queue-row')).toHaveCount(1);
-  await page.getByLabel('合成规划项目 P002 队列状态', { exact: true }).selectOption('completed');
-  await expect(page.getByLabel('合成规划项目 P002 队列状态', { exact: true })).toHaveValue(
-    'completed',
-  );
+  await page.getByLabel('P002 标记已完成', { exact: true }).click();
+  await expect(page.getByLabel('P002 标记已完成', { exact: true })).toBeChecked();
   await expect(body).toHaveCount(0);
   await page.getByLabel('全局搜索', { exact: true }).fill('unknown:abc');
   await expect(page.getByText('无法识别筛选：unknown:abc', { exact: true })).toBeVisible();

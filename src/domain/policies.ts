@@ -2,7 +2,7 @@ import { AppFault } from '../types/errors';
 import type { PromptMeta, PromptStatus } from './schemas';
 
 export function checkpointRequired(next: PromptStatus): boolean {
-  return next === 'ready' || next === 'submitted';
+  return next === 'ready' || next === 'completed';
 }
 export function validateTransition(meta: PromptMeta, next: PromptStatus, body: string): void {
   if (meta.deletedAt) throw new AppFault('INVALID_SCHEMA');

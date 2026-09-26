@@ -184,6 +184,71 @@ small {
   gap: 12px;
   flex-wrap: wrap;
 }
+.migration-review {
+  width: min(740px, 100%);
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 36px #24302012;
+}
+.migration-review h1 {
+  font-size: 38px;
+  letter-spacing: -1px;
+  margin: 12px 0;
+}
+.migration-review .lead {
+  font-size: 14px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.migration-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 20px 0;
+}
+.migration-counts span {
+  padding: 5px 9px;
+  border: 1px solid #e6ebe2;
+  border-radius: 5px;
+  background: #f3f6f1;
+  color: #53624f;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.migration-choices {
+  margin: 22px 0;
+  max-height: 300px;
+  overflow: auto;
+}
+.migration-choices h2 {
+  font-size: 15px;
+}
+.migration-choices label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.migration-choices label small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+.migration-choices select {
+  width: 140px;
+  min-width: 120px;
+}
+.migration-review .launch-actions {
+  margin-top: 20px;
+}
+.migration-review .notice[role='alert'] {
+  color: #a44a35;
+}
 .privacy-note {
   margin-top: 48px;
   padding-top: 23px;
@@ -328,6 +393,46 @@ small {
   display: flex;
   flex-direction: column;
 }
+.sidebar-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+.sidebar-brand-row .brand {
+  min-width: 0;
+}
+.sidebar-toggle {
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.sidebar-collapsed .sidebar {
+  width: 70px;
+  padding-inline: 10px;
+}
+.sidebar-collapsed .brand-label,
+.sidebar-collapsed .workspace-name,
+.sidebar-collapsed .section-label,
+.sidebar-collapsed .project-nav,
+.sidebar-collapsed .local-badge,
+.sidebar-collapsed .nav-item span:not(.project-dot),
+.sidebar-collapsed .nav-item small {
+  display: none;
+}
+.sidebar-collapsed .sidebar-brand-row,
+.sidebar-collapsed .brand,
+.sidebar-collapsed .sidebar-toggle {
+  justify-content: center;
+}
+.sidebar-collapsed .sidebar-toggle {
+  padding: 8px 0;
+}
+.sidebar-collapsed .sidebar-bottom .nav-item {
+  justify-content: center;
+  padding-inline: 8px;
+}
 .workspace-name {
   display: flex;
   align-items: center;
@@ -421,6 +526,21 @@ small {
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
+}
+.topbar-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.topbar-actions button {
+  font-size: 11px;
+  padding: 6px 9px;
 }
 .global-notice {
   margin: 8px 15px;
@@ -532,17 +652,8 @@ small {
 .status-dot.ready {
   background: #d4ac55;
 }
-.status-dot.submitted {
-  background: #759bb1;
-}
-.status-dot.waiting {
-  background: #ad8bb6;
-}
 .status-dot.completed {
-  background: #74a484;
-}
-.status-dot.blocked {
-  background: #c57e72;
+  background: #5e91a7;
 }
 .project-workspace {
   display: flex;
@@ -614,6 +725,45 @@ small {
   background: #edf1e9;
   color: #52704e;
 }
+.prompt-bucket-tabs {
+  display: flex;
+  gap: 5px;
+  margin: 8px 0 2px;
+  padding: 3px;
+  background: #f2f5ef;
+  border-radius: 7px;
+}
+.prompt-bucket-tabs button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 7px 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.prompt-bucket-tabs button.active {
+  background: white;
+  color: var(--green);
+  box-shadow: 0 1px 2px #23332218;
+}
+.prompt-card-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 5px;
+}
+.todo-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.todo-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--green);
+}
 .prompt-items {
   overflow: auto;
   flex: 1;
@@ -625,8 +775,8 @@ small {
   justify-content: flex-start;
   width: 100%;
   gap: 11px;
-  padding: 17px 12px;
-  margin-bottom: 9px;
+  padding: 10px 12px;
+  margin-bottom: 5px;
   border: 1px solid transparent;
   background: transparent;
   border-radius: 7px;
@@ -642,7 +792,7 @@ small {
   font-weight: 500;
   line-height: 1.65;
   font-size: 13px;
-  margin: 6px 0 9px;
+  margin: 4px 0 5px;
   overflow-wrap: anywhere;
 }
 .prompt-card small {
@@ -659,13 +809,18 @@ small {
   background: #f8f0dd;
   color: #b38c43;
 }
-.status-label.submitted {
+.status-label.completed {
   background: #e6f0f6;
-  color: #7192a7;
+  color: #5e7f92;
 }
-.status-label.waiting {
-  background: #f1e9f4;
-  color: #9b7aa5;
+.prompt-card-controls select {
+  width: auto;
+  min-width: 0;
+  padding: 2px 5px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
 }
 .flow .prompt-card {
   position: relative;
@@ -724,6 +879,20 @@ small {
   color: #b1b9ac;
   background: transparent;
   margin-left: auto;
+}
+.prompt-meta .copy-prompt-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--green);
+  background: white;
+}
+.prompt-meta .copy-prompt-top:hover {
+  background: #edf3e9;
 }
 .editor-toolbar {
   border-top: 1px solid #f1f3ed;
@@ -787,6 +956,12 @@ small {
 }
 .order-controls button {
   padding: 2px 8px;
+}
+.order-controls button[draggable='true'] {
+  cursor: grab;
+}
+.order-controls button[draggable='true']:active {
+  cursor: grabbing;
 }
 .queue-section {
   margin-top: 35px;
@@ -1317,7 +1492,7 @@ small {
   }
   .prompt-list {
     width: auto;
-    height: 250px;
+    height: 280px;
     flex-shrink: 0;
     padding: 14px;
     border-bottom: 1px solid var(--border);
@@ -1340,7 +1515,7 @@ small {
     min-width: 180px;
     width: 180px;
     flex-shrink: 0;
-    padding: 8px;
+    padding: 9px;
   }
   .prompt-card h3 {
     font-size: 11px;

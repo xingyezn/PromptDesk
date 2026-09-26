@@ -24,7 +24,7 @@ export function matchesSearch(document: SearchDocument, filters: SearchFilters):
   if (
     meta.deletedAt ||
     project.deletedAt ||
-    (!filters.includeArchived && (meta.status === 'archived' || project.status === 'archived'))
+    (!filters.includeArchived && project.status === 'archived')
   )
     return false;
   if (filters.projectId && project.id !== filters.projectId) return false;

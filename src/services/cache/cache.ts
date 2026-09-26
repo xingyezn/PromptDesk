@@ -10,6 +10,11 @@ interface Recent {
   directoryHandle: FileSystemDirectoryHandle;
   lastOpenedAt: string;
 }
+interface UIPreference {
+  workspaceId: string;
+  key: string;
+  value: string;
+}
 export interface RecoveryDraft {
   workspaceId: string;
   recentKey: string;
@@ -30,6 +35,7 @@ export interface SearchCacheEntry {
 }
 class CacheDatabase extends Dexie {
   recentWorkspaces!: Table<Recent, string>;
+  uiPreferences!: Table<UIPreference, [string, string]>;
   recoveryDrafts!: Table<RecoveryDraft, [string, string, string]>;
   searchIndex!: Table<SearchCacheEntry, [string, string, string]>;
   constructor() {
@@ -115,5 +121,13 @@ export class CacheService {
         for (const table of this.db.tables) await table.clear();
       }),
     );
+  }
+  getPreference(workspaceId: string, key: string) {
+    return this.safe(
+      async () => (await this.db.uiPreferences.get([workspaceId, key]))?.value ?? null,
+    );
+  }
+  putPreference(workspaceId: string, key: string, value: string) {
+    return this.safe(() => this.db.uiPreferences.put({ workspaceId, key, value }));
   }
 }

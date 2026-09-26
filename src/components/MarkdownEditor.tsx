@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -9,11 +10,14 @@ export function MarkdownEditor({
   body,
   readonly,
   onChange,
+  onSplitSelection,
 }: {
   body: string;
   readonly: boolean;
   onChange: (body: string) => void;
+  onSplitSelection?: (selected: string, from: number, to: number) => void;
 }) {
+  const [hasSelection, setHasSelection] = useState(false);
   const host = useRef<HTMLDivElement>(null),
     view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
@@ -40,6 +44,10 @@ export function MarkdownEditor({
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !syncing.current)
               callback.current(update.state.doc.toString());
+            if (update.selectionSet) {
+              const { from, to } = update.state.selection.main;
+              setHasSelection(to > from);
+            }
           }),
           EditorView.theme({
             '&': { height: '100%', fontSize: '15px' },
@@ -102,6 +110,21 @@ export function MarkdownEditor({
             {formatLabels[kind]}
           </button>
         ))}
+        {onSplitSelection && (
+          <button
+            type="button"
+            disabled={readonly || !hasSelection}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              const editor = view.current;
+              if (!editor) return;
+              const { from, to } = editor.state.selection.main;
+              if (to > from) onSplitSelection(editor.state.sliceDoc(from, to), from, to);
+            }}
+          >
+            拆分选中内容
+          </button>
+        )}
         <small>选择多行可转列表；制表符分隔文本可转表格</small>
       </div>
       <div className="markdown-editor" ref={host} />
