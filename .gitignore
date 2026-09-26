@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+work/
+workspaces/
+.promptdesk/
+.env.local
+.env.*.local
+*.tsbuildinfo
