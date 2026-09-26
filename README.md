@@ -64,7 +64,7 @@ npm run preview
 
 本地开发地址为 `http://127.0.0.1:5173/`。浏览器端到端测试首次运行需 `npx playwright install chromium`，然后 `npm run test:e2e`；Windows 已装 Edge 时可在 PowerShell 使用 `$env:PLAYWRIGHT_CHANNEL='msedge'; npm run test:e2e`。自动化使用合成目录，不替代原生目录授权验收。
 
-`npm run test:e2e:production` 会构建 `/PromptDesk/` 子路径产物，再在生产预览运行主要浏览器流程（Windows 同样可设置 PLAYWRIGHT_CHANNEL）。可通过 VITE_BASE_PATH 覆盖 base；不运行第二遍规模测试。CI 和部署构建都加入该检查，工作流尚未在远端执行。
+`npm run test:e2e:production` 会构建 `/PromptDesk/` 子路径产物，再在生产预览运行主要浏览器流程（Windows 同样可设置 PLAYWRIGHT_CHANNEL）。可通过 VITE_BASE_PATH 覆盖 base；不运行第二遍规模测试。CI 和部署构建都执行该检查。
 
 本地通过 localhost 打开；生产通过 HTTPS 打开，不能用双击 index.html 的方式运行。启动时检测安全上下文和目录选择能力；不支持时显示浏览器指引，不启用另一套虚拟 Workspace。目录选择必须由用户点击触发，句柄恢复后也可能需要重新授权，参见 [File System Access API 官方说明](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access)。
 
@@ -85,15 +85,13 @@ npm run preview
 
 工作台默认只搜索标题/项目/标签，点击“建立全文索引”后搜索正文；索引支持进度/取消，外部文件变化后点击刷新。临时草稿转入项目保留原文本并只读，可在“已转入”查看；转入目标是新 draft Prompt，没有自动版本。
 
-## 6. GitHub Pages 部署（工作流已添加，尚未发布）
+## 6. GitHub Pages 部署
 
-1. 建立应用仓库；真实 Workspace 放在仓库外。提交源代码、文档、lockfile 和工作流。
-2. 仓库 Settings → Pages → Source 选 GitHub Actions。
-3. 添加 TECH_SPEC 中的 `.github/workflows/deploy.yml`。main 推送后执行检查、构建、发布；PR 仅执行检查，不部署。
-4. 项目站点配置 `VITE_BASE_PATH=/promptdesk/`（替换为仓库名）；用户站点或自定义域名配置 `/`。
-5. 打开 `https://<user>.github.io/<repo>/#/`；在项目、编辑器、设置路由刷新并验证资源和导航。
+当前 dev.5 已部署到公开的 [PromptDesk GitHub 仓库](https://github.com/xingyezn/PromptDesk)，在线地址为 [https://xingyezn.github.io/PromptDesk/](https://xingyezn.github.io/PromptDesk/)。首个 GitHub Actions 检查及 Pages 部署成功；可查看 [CI 运行记录](https://github.com/xingyezn/PromptDesk/actions/runs/36260519381) 和 [部署运行记录](https://github.com/xingyezn/PromptDesk/actions/runs/36260519373)。发布流程使用 `/PromptDesk/` 子路径，Pages 已配置为 GitHub Actions 并强制 HTTPS。
 
-当前 deploy.yml 预设仓库路径为 `/PromptDesk/`。创建远程仓库时如使用其他名称，修改此路径；当前没有配置远程 URL 或已上线地址。发布前必须完成原生能力及隐私验收。
+后续推送到 `main` 会执行检查后部署 `dist/`；Pull Request 只运行检查，不部署。若仓库名称改变，需同步修改 `.github/workflows/deploy.yml` 中的 `VITE_BASE_PATH`。真实 Workspace 必须留在仓库外；公开仓库只包含应用、文档和合成测试数据。
+
+当前公开站点是 dev.5 开发预览，不代表 V0.1 发布验收已完成。已验证 HTTPS 首页、hash 路由入口和静态 JS/CSS 资源；真实桌面 Chrome/Edge 的原生目录授权、设备读写、重新授权和工作空间往返仍待手测，不能用合成 picker 测试替代。
 
 必须只发布 dist/，不能上传仓库根目录或 Workspace。HashRouter 避免静态托管下的路径刷新 404；base 用于资源路径。配置依据 [Vite 静态部署文档](https://vite.dev/guide/static-deploy) 和 [GitHub Pages 自定义工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。
 
