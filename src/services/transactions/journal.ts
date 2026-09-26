@@ -34,9 +34,9 @@ export class Journal {
     changes: Change[],
     kind: PendingManifest['kind'],
     operationId = newId('op'),
-  ): Promise<void> {
+  ): Promise<PendingManifest | null> {
     if (this.blocked) throw new AppFault('RECOVERY_REQUIRED');
-    if (!changes.length) return;
+    if (!changes.length) return null;
     const keys = changes.map((c) => c.path.join('/'));
     if (new Set(keys).size !== keys.length || changes.some((c) => !isBusinessPath(c.path)))
       throw new AppFault('PATH_INVALID');
@@ -49,6 +49,7 @@ export class Journal {
     }
     const root = ['.promptdesk', 'pending', operationId];
     const entries: PendingManifest['entries'] = [];
+    let committedRecord: PendingManifest;
     try {
       for (const [index, change] of changes.entries()) {
         const name = `${String(index + 1).padStart(4, '0')}.txt`;
@@ -72,6 +73,7 @@ export class Journal {
         commitMarkerPath: marker.path,
         entries,
       };
+      committedRecord = { ...manifest, phase: 'committed' };
       const manifestText = json(manifest);
       await this.fs.write([...root, 'manifest.json'], manifestText, null);
       for (const change of changes)
@@ -95,8 +97,10 @@ export class Journal {
     // Cleanup failure is not a failed save: all business targets have already been verified.
     try {
       await this.fs.cleanupPending(operationId);
+      return null;
     } catch {
       this.blocked = true;
+      return committedRecord;
     }
   }
   async inspect(): Promise<PendingManifest[]> {

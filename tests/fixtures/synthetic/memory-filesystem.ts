@@ -9,8 +9,10 @@ export class MemoryFileSystem implements FileSystemPort {
   private readonly dirs = new Set<string>();
   fail: ((path: string) => boolean) | null = null;
   failCleanupOnce = false;
+  failReads = false;
   async read(path: readonly string[]): Promise<TextFile | null> {
     validatePath(path);
+    if (this.failReads) throw new AppFault('PERMISSION_DENIED');
     const text = this.files.get(path.join('/'));
     return text === undefined
       ? null
@@ -56,6 +58,7 @@ export class MemoryFileSystem implements FileSystemPort {
   async cleanupPending(operationId: string): Promise<void> {
     if (this.failCleanupOnce) {
       this.failCleanupOnce = false;
+      this.failReads = true;
       throw new AppFault('WRITE_FAILED');
     }
     const prefix = `.promptdesk/pending/${operationId}`;

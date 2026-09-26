@@ -225,10 +225,10 @@ export class WorkspaceRuntime {
       if (!expected || (await this.fs.read(key.split('/')))?.hash !== (await sha256(expected)))
         throw new AppFault('CONFLICT');
     }
-    await this.journal.commit(changes, kind, operationId);
+    const leftover = await this.journal.commit(changes, kind, operationId);
     // A verified commit can still leave its journal behind if cleanup fails.
-    // Surface that record in the live session so recovery is available without reopening.
-    this.pending = await this.journal.inspect();
+    // Use the verified in-memory record: permission may be revoked before another disk read.
+    this.pending = leftover ? [leftover] : [];
     for (const change of changes) this.originals.set(change.path.join('/'), change.after);
   }
   async load(): Promise<WorkspaceView> {

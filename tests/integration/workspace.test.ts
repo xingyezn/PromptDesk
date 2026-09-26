@@ -83,11 +83,12 @@ describe('local workspace integration', () => {
     fs.failCleanupOnce = true;
     const saved = await runtime.checkpoint(project.id, prompt.id, 'recoverable', 'ready');
     expect(saved.meta.currentVersion).toBe(1);
+    expect(runtime.view().pending).toHaveLength(1);
+    const operationId = runtime.view().pending[0]!.operationId;
+    fs.failReads = false;
     expect(
       (await fs.read([...promptPath(project.slug, prompt.id), 'versions', 'v001.md']))?.text,
     ).toBe('recoverable');
-    expect(runtime.view().pending).toHaveLength(1);
-    const operationId = runtime.view().pending[0]!.operationId;
     await expect(runtime.recover(operationId, 'rollback')).rejects.toThrow();
     const recovered = await runtime.recover(operationId, 'finish');
     expect(recovered.pending).toHaveLength(0);
