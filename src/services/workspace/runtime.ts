@@ -226,6 +226,9 @@ export class WorkspaceRuntime {
         throw new AppFault('CONFLICT');
     }
     await this.journal.commit(changes, kind, operationId);
+    // A verified commit can still leave its journal behind if cleanup fails.
+    // Surface that record in the live session so recovery is available without reopening.
+    this.pending = await this.journal.inspect();
     for (const change of changes) this.originals.set(change.path.join('/'), change.after);
   }
   async load(): Promise<WorkspaceView> {

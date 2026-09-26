@@ -78,6 +78,24 @@ describe('local workspace integration', () => {
     const second = await WorkspaceRuntime.open(fs);
     expect((await second.load()).prompts[0]?.versions).toHaveLength(1);
   });
+  it('exposes a committed operation when journal cleanup fails in the live session', async () => {
+    const { fs, runtime, project, prompt } = await fixture();
+    fs.failCleanupOnce = true;
+    const saved = await runtime.checkpoint(project.id, prompt.id, 'recoverable', 'ready');
+    expect(saved.meta.currentVersion).toBe(1);
+    expect(
+      (await fs.read([...promptPath(project.slug, prompt.id), 'versions', 'v001.md']))?.text,
+    ).toBe('recoverable');
+    expect(runtime.view().pending).toHaveLength(1);
+    const operationId = runtime.view().pending[0]!.operationId;
+    await expect(runtime.recover(operationId, 'rollback')).rejects.toThrow();
+    const recovered = await runtime.recover(operationId, 'finish');
+    expect(recovered.pending).toHaveLength(0);
+    expect(recovered.prompts[0]?.currentVersion).toBe(1);
+    expect(
+      (await fs.read([...promptPath(project.slug, prompt.id), 'versions', 'v001.md']))?.text,
+    ).toBe('recoverable');
+  });
   it('rolls back only generated matching files and preserves external changes', async () => {
     const { fs, runtime, project, prompt, root } = await fixture();
     fs.fail = (path) => path === [...root, 'meta.json'].join('/');

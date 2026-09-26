@@ -153,6 +153,8 @@ export class Journal {
       currentRecord.workspaceId !== this.workspaceId
     )
       throw new AppFault('INVALID_SCHEMA');
+    if (currentRecord.phase === 'committed' && choice === 'rollback')
+      throw new AppFault('RECOVERY_REQUIRED');
     await this.verifySnapshots(currentRecord);
     const root = ['.promptdesk', 'pending', record.operationId];
     for (const entry of currentRecord.entries) {

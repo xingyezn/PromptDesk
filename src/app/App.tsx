@@ -850,15 +850,16 @@ export function App() {
               <div className="recovery-card" key={p.operationId}>
                 <p>
                   {p.entries.length} 个文件 · {p.kind}
+                  {p.phase === 'committed' ? ' · 保存已成功，待清理临时日志' : ''}
                 </p>
                 <button
                   disabled={!view.writable}
                   onClick={() => void recoverPending(p.operationId, 'finish')}
                 >
-                  完成保存
+                  {p.phase === 'committed' ? '完成清理' : '完成保存'}
                 </button>
                 <button
-                  disabled={!view.writable}
+                  disabled={!view.writable || p.phase === 'committed'}
                   onClick={() => void recoverPending(p.operationId, 'rollback')}
                 >
                   回退本次保存

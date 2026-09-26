@@ -279,10 +279,10 @@ V0.1 需要最小可恢复协议，而非声称全盘原子性：
 1. 串行队列中校验输入、权限、所有 before 指纹及版本文件不存在；生成 operationId。
 2. 在 `.promptdesk/pending/<operationId>/` 保存每个被改变文件的 before/after UTF-8 副本；校验副本 hash，最后写 manifest.json。before 不存在用 null 标记。manifest 持久化完成前禁止改业务文件。
 3. 写正文/新版本文件，再写业务元数据。各操作的最终元数据为 commit marker；包含 lastOperationId。项目创建最后写 project.json；Prompt 创建最后写 meta.json；Workspace 初始化最后写 workspace.json；转入项目最后更新 Scratchpad 的 transferredTo。
-4. 写完所有目标并验证 after hash 后，将 manifest.phase 改为 committed，更新内存和缓存；完成后移除 pending 副本。清理失败不能把已成功保存报告为数据未保存，保留清理提示并在下次打开验证。
+4. 写完所有目标并验证 after hash 后，将 manifest.phase 改为 committed，更新内存和缓存；完成后移除 pending 副本。清理失败不能把已成功保存报告为数据未保存；保留并显示已验证的 pending 记录，允许当前会话或下次打开后继续恢复/清理。
 5. 任一步失败：保留 pending 与编辑器，返回 RECOVERY_REQUIRED/WRITE_FAILED，暂停相关写入，不继续提交状态或推进版本号。
 
-打开时发现 pending：如果全部目标与 after hash 一致，作为已完成提交验证后清理；全部与 before 一致，作为未提交操作处理；混合 before/after 提供“完成保存”或“回退本次保存”，先展示受影响路径。任一目标既不等于 before 也不等于 after，视为外部冲突，只读诊断，不自动完成/回退。恢复只写匹配 before/after 的文件。rollback 对原本不存在的文件只允许移除 hash 精确等于 after 的应用生成文件，不能递归删除业务目录。初始化回退后允许保留空的应用目录；再次初始化先验证它们确为空且不含未知文件，再展示计划让用户确认。
+打开时发现 pending：如果全部目标与 after hash 一致，作为已完成提交验证后清理；全部与 before 一致，作为未提交操作处理；混合 before/after 提供“完成保存”或“回退本次保存”，先展示受影响路径。phase 已为 committed 的操作仅允许清理，不允许回滚已确认成功的保存。任一目标既不等于 before 也不等于 after，视为外部冲突，只读诊断，不自动完成/回退。恢复只写匹配 before/after 的文件。rollback 对原本不存在的文件只允许移除 hash 精确等于 after 的应用生成文件，不能递归删除业务目录。初始化回退后允许保留空的应用目录；再次初始化先验证它们确为空且不含未知文件，再展示计划让用户确认。
 
 同会话读取与刷新必须等待当前队列提交或失败，不能在多文件事务半途中建立索引。只读第二窗口若发现另一个窗口持锁且存在 pending，只显示“另一个窗口正在保存”，不尝试恢复或读取受影响条目；收到提交通知后重读。只有获得写锁才能执行恢复/清理，不能把活动事务误判为崩溃遗留。
 

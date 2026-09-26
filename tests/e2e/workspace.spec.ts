@@ -22,12 +22,25 @@ test('synthetic UI workflow saves drafts, versions and restores current content'
   await expect(page.getByText('V1', { exact: true })).toBeVisible();
   await page.getByLabel('Prompt 状态', { exact: true }).selectOption('submitted');
   await expect(page.getByLabel('Prompt 状态', { exact: true })).toHaveValue('submitted');
+  await page.evaluate(() => {
+    const synthetic = (
+      window as Window & {
+        promptdeskSyntheticFailure?: { failCleanupOnce: boolean };
+      }
+    ).promptdeskSyntheticFailure;
+    if (synthetic) synthetic.failCleanupOnce = true;
+  });
+  await body.fill('已提交但日志待清理');
+  await expect(page.getByText('保存已成功，待清理临时日志', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: '回退本次保存', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '完成清理', exact: true }).click();
+  await expect(body).toHaveText('已提交但日志待清理');
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: '复制 Prompt', exact: true }).click();
   await expect(page.getByLabel('Prompt 状态', { exact: true })).toHaveValue('submitted');
   // Windows clipboard may expose native CRLF; compare the same lines without changing app input.
   expect((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n')).toBe(
-    '第一版提示词\n请保留中文与换行。',
+    '已提交但日志待清理',
   );
   await body.fill('第二版草稿');
   await expect(page.getByText('已保存到工作空间', { exact: true })).toBeVisible();

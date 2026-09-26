@@ -8,6 +8,7 @@ export class MemoryFileSystem implements FileSystemPort {
   readonly files = new Map<string, string>();
   private readonly dirs = new Set<string>();
   fail: ((path: string) => boolean) | null = null;
+  failCleanupOnce = false;
   async read(path: readonly string[]): Promise<TextFile | null> {
     validatePath(path);
     const text = this.files.get(path.join('/'));
@@ -53,6 +54,10 @@ export class MemoryFileSystem implements FileSystemPort {
     this.files.delete(path.join('/'));
   }
   async cleanupPending(operationId: string): Promise<void> {
+    if (this.failCleanupOnce) {
+      this.failCleanupOnce = false;
+      throw new AppFault('WRITE_FAILED');
+    }
     const prefix = `.promptdesk/pending/${operationId}`;
     for (const key of this.files.keys()) if (key.startsWith(`${prefix}/`)) this.files.delete(key);
     for (const key of this.dirs)

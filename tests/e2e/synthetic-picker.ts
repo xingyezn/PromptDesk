@@ -3,6 +3,10 @@ export function installSyntheticPicker(options?: {
   migration?: boolean;
   seedFiles?: [string, string][];
 }) {
+  const failureState = window as Window & {
+    promptdeskSyntheticFailure?: { failCleanupOnce: boolean };
+  };
+  failureState.promptdeskSyntheticFailure = { failCleanupOnce: false };
   function createRoot(rootName: string, seedFiles: [string, string][] = []) {
     const files = new Map<string, string>(),
       dirs = new Set<string>(['']);
@@ -60,6 +64,13 @@ export function installSyntheticPicker(options?: {
         },
         removeEntry: async (name: string, options?: { recursive?: boolean }) => {
           const key = path ? `${path}/${name}` : name;
+          if (
+            key.startsWith('.promptdesk/pending/op_') &&
+            failureState.promptdeskSyntheticFailure?.failCleanupOnce
+          ) {
+            failureState.promptdeskSyntheticFailure.failCleanupOnce = false;
+            throw new DOMException('Synthetic cleanup failure', 'NotAllowedError');
+          }
           files.delete(key);
           dirs.delete(key);
           if (options?.recursive) {

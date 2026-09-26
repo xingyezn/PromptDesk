@@ -2,7 +2,7 @@
 
 部署于 GitHub Pages 的本地优先 Prompt 工作台。用 Project → Prompt → Version 管理提示词，用状态追踪构思、提交和完成过程。编辑器中的 Enter 只换行；应用没有向模型发送内容的功能。
 
-依据《PromptDesk PRD V0.1》开发，当前版本为 `0.1.0-dev.3`。本地工作流与管理功能已逐批实现并通过合成测试，尚未完成全部发布验收和真实 GitHub Pages 部署。开发进度见 V0.1_TASKS，初始基线见 [开发预览验证记录](docs/qa/2026-09-26-development-preview.md)。
+依据《PromptDesk PRD V0.1》开发，当前版本为 `0.1.0-dev.4`。本地工作流与管理功能已逐批实现并通过合成测试，尚未完成全部发布验收和真实 GitHub Pages 部署。开发进度见 V0.1_TASKS，初始基线见 [开发预览验证记录](docs/qa/2026-09-26-development-preview.md)。
 
 整体开发与最终产品计划见 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)，涵盖现有预览到完整本地工作台及正式发布的全部里程碑。新增的备份迁移和写作操作纳入原有计划，原有未完成任务继续保留。
 
