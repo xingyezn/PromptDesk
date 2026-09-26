@@ -5,7 +5,7 @@ test('synthetic UI workflow saves drafts, versions and restores current content'
   page,
 }) => {
   await page.addInitScript(installSyntheticPicker);
-  await page.goto('/');
+  await page.goto('./');
   await page.getByRole('button', { name: '创建新工作空间', exact: true }).click();
   await page.getByLabel('名称', { exact: true }).fill('合成 UI 工作空间');
   await page.getByRole('button', { name: '确认', exact: true }).click();
@@ -14,8 +14,7 @@ test('synthetic UI workflow saves drafts, versions and restores current content'
   await page.getByLabel('名称', { exact: true }).fill('合成 UI 项目');
   await page.getByRole('button', { name: '确认', exact: true }).click();
   await page.getByRole('button', { name: '新建 Prompt', exact: true }).last().click();
-  await page.getByLabel('名称', { exact: true }).fill('合成 UI 提示词');
-  await page.getByRole('button', { name: '确认', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   const body = page.getByRole('textbox', { name: 'Prompt 正文' });
   await body.fill('第一版提示词\n请保留中文与换行。');
   await expect(page.getByText('已保存到工作空间', { exact: true })).toBeVisible();

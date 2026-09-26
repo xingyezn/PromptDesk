@@ -1,5 +1,19 @@
 # PromptDesk V0.1 数据规范
 
+## 追加约定：备份、迁移及快速新建（2026-09-26）
+
+由用户追加的功能不改变 schemaVersion=1、磁盘布局和现有状态/版本语义。新 Prompt 不必输入标题，默认 title 为“未命名提示词”；后续可通过元数据事务改标题，ID/目录不变。
+
+本地 ZIP 与复制迁移只包含本规范定义的 `.promptdesk/workspace.json`、`settings.json`、`projects/<slug>/project.json`、可选 `README.md`、Prompt `meta.json/current.md/versions/vNNN.md`、可选 `result.md`、Scratchpad `meta.json/current.md`。包括已归档/逻辑删除项；保留 JSON 未知字段和所有历史版本的原文本。不会添加额外 schema、不会修改复制文件的 revision/时间/ID。
+
+缓存与 pending 不复制；源 pending 非空先恢复；根目录其他文件由用户自行管理。应用目录内出现未知文件、坏 schema、缺关联文件或版本 hash 不一致则阻止打包迁移，不静默遗漏。根外路径和不合法段禁止操作。转移限制最多 5000 文件、总 32 MiB、单文件 5 MiB；这是当前实现容量，不等同于所有 Workspace 的上限。
+
+迁移要求用户选择空目标并确认，目标使用 initialize pending（before 全空，after 全量），根标识最后写；可以复用现有初始化恢复流程，准备阶段不完整则保留副本做诊断。原目录保留不删除；新目录保持 workspaceId，缓存目录身份必须重新计算 recentKey，不串恢复草稿。ZIP 解压后按已有 Workspace 打开；不自动迁移 schema，不实现压缩包直接导入。
+
+工作流补充：Scratchpad 转入将源 current.md 的不变内容也作为事务前置/核对目标，防止复制时接受过期正文。源 meta.transferredTo 是重复操作的唯一目标依据；转入和排序仍沿用 schema1 和原 ID/order 规则，无新增业务字段。归档对象的内容/资料只读；相关项目结构操作维持 order 连续，不改变归档状态和历史。
+
+搜索 cache schema 仍为 DB v1，searchIndex 记录增加 recentKey（非句柄）、contentHash、revision，磁盘重读后写缓存；当前只用内存索引展示，不将未经磁盘核对的缓存当作正文来源。清空缓存不改磁盘；Scratchpad 恢复副本 entityKey 为 scratch:<id>，目前保存未落盘正文，不包含未保存标题。Settings 文件缺失或损坏时保持只读，不猜测可写默认配置。
+
 日期：2026-09-26。磁盘 schemaVersion=1；IndexedDB dbVersion 独立维护。本文将 PRD 示例字段细化为正式开发契约，补充 revision、版本元数据、状态历史、逻辑删除和恢复记录。PRD 中的简略 JSON 是产品示意，不是已发布格式；缺字段的真实目录不得默默补齐后覆盖。
 
 ## 1. 权威来源与目录结构

@@ -1,5 +1,36 @@
 # PromptDesk V0.1 技术规格
 
+## 追加规格：整体计划及工作空间管理（2026-09-26）
+
+用户明确追加的范围见 DEVELOPMENT_PLAN。包管理新增固定版本 fflate 0.8.3（本地 ZIP）及 remark-gfm 4.0.1（Markdown 表格/任务列表预览）；锁定 package-lock，不使用 CDN。参见 [fflate 文档](https://github.com/101arrowz/fflate)、[remark-gfm 文档](https://github.com/remarkjs/remark-gfm)。本节覆盖下文旧接口中的必填创建标题限制及手工复制目录的范围说明。
+
+- `createPrompt(projectId, title?)` 默认“未命名提示词”，成功落盘后直接打开正文，标题可后改。
+- `transitionStoredPrompt(projectId, promptId, status)` 先校验列表元数据指纹，读取该 Prompt 磁盘正文，再走同一个 checkpoint。UI 先 flush 当前草稿；目标不同时不改变当前选中 Prompt。失败不提前修改列表状态。
+- CodeMirror 使用 Markdown keymap 续写列表；工具栏对选择内容做纯文本格式变换，支持标题/粗体/列表/任务/引用/代码/表格（制表符转列）。Ctrl/Cmd+Enter 不提交，IME 不触发业务；预览依旧关闭 raw HTML 和图片，安全链接仅用户点击打开。
+- `updateSettings({name,defaultTarget,autosaveEnabled,autosaveDelayMs})` 显式白名单；同一队列事务写 settings.json 与 workspace.json，校验后更新 view。自动保存关闭仍有手动草稿按钮及未保存反馈。
+- `files()/readLocalFile(path)` 只读应用文件的相对路径与 UTF-8 内容；FSA 在 filesystem 层。网页不能可靠获取绝对路径或打开系统文件管理器，UI 不声称具备这些能力。
+- `snapshot()` 在 Workspace 写队列中枚举并验证规范内应用文件（含逻辑删除/归档/完整版本及规范可选 README/result）；根目录其他资料不枚举正文。应用目录内的未知条目阻止转移，避免静默漏备份。
+- 快照最多 5000 个文件、总 32 MiB、单文件仍 5 MiB；按 UTF-8 文本采集，逐个 hash，前后重复核对文件集合和指纹。不承诺 OS 原子快照，外部程序仍可能在最后校验后改动文件。
+- `exportArchive()` 校验快照后本地生成 ZIP Blob，由浏览器下载。反馈为“下载已生成”，不把下载开始当作用户设备已可靠保存。ZIP 内根布局直接是规范目录；恢复为用户解压至空目录，再打开已有 Workspace。没有 ZIP 上传/直接导入。
+- `prepareMigration()` 必须在用户点击调用栈中启动目录 picker，目标必须空目录，记录 sessionId 和源快照；弹窗展示范围，再 `migrate()`。
+- 迁移使用目标 Journal 的 initialize 操作（根 manifest 最后落盘），不复制源 pending；规范可选 README.md/result.md 仅作为转移目标写入白名单。目标写入 expected absent、close 后重读、完成核对源/目标快照。目标完整后新 Runtime 打开并校验，保留同 workspaceId 及同源锁，切换会话和 recentKey，原目录始终保留。
+- 迁移准备后源变化/目标不空/写失败/权限撤销则不切换；失败目标保留恢复日志，通过打开目标完成或回退。准备记录未成 manifest 时只做诊断，不假称可自动恢复。全量复制没有原子 move/rename 假设，不删除源文件，不自动重试覆盖。
+
+转移 helper 接收 FileSystemPort，可在合成适配器验证；service 不依赖 React/Zustand。缓存副本不加入 ZIP/迁移，不从缓存重放正文；浏览器授权和系统设备 IO 仍需真机验收。
+
+## 当前工作流实现补充（2026-09-26）
+
+- 工程目前由 `WorkspaceController` 提供 Result 边界，`WorkspaceRuntime` 聚合项目/Prompt/版本/Scratchpad use case，共享一个 Journal。下文的拆分接口仍是目标端口描述，不能把尚未拆成独立类误写为已完成；组件通过 controller/run 调用，服务不依赖 UI store。
+- `createNext` 和完整 ID 列表 `reorder` 在单一事务内创建/调整 order；字段 patch 白名单增加项目 description/tags。项目或 Prompt 归档后正文/资料不可编辑，项目级结构调整仅维持 order 连续，不改归档内容、状态或历史。
+- Prompt 元数据创建使用纯领域工厂；parent 同项目引用及循环、active order 连续关系校验在加载/完整快照中执行。已损坏文件造成的排序缺口不会再次把正常同级条目标为损坏。规范内版本仍按需 hash 验证。
+- Scratchpad 元数据随导航扫描；创建/打开/保存/逻辑删除独立 use case。转入在一个 Journal 中核对源 current.md，创建目标 current/meta，最后提交源 transferredTo；源保留且只读。重复转入验证已有目标并返回原引用，目标缺失不再创建。
+- Scratchpad 编辑器有 editSeq/persistedSeq、会话/实体校验、防抖、恢复副本和导航 flush 注册；缓存失效时已落盘草稿仍可重开。标题未落盘的恢复语义与正文区分：缓存恢复副本保存正文，标题应等待设置事务成功，不承诺瞬间关闭恢复未保存标题。
+- Dashboard 增加跨项目队列、字段 AND 筛选、`status/model/tag/project` 查询前缀与未知筛选反馈。用户点击建立/刷新全文索引；正文逐条从当前磁盘读取，不阻挡首次导航加载去等全文。每十条更新进度并让出界面，AbortSignal 和 runtime 身份保护切换/取消后的回调；取消后明确显示结果不完整。
+- 搜索缓存记录 recentKey、revision、正文 hash；当前不复用未核对磁盘的正文缓存，刷新从磁盘重建。业务变化使缓存索引失效。界面未打开新索引时只搜索元数据，并有常驻说明；缓存失败不阻止搜索直读。
+- `externalChanges` 仅检查根/设置及当前打开 Prompt 的少量指纹，窗口 focus 不批量读取所有正文，也不更新写基线。所有业务提交另核对根、设置与相关父项目，防止外部替换工作空间身份或设置后继续按旧会话写入。
+- 冲突重新加载提供确认并保留原草稿在当前会话可查看/复制；`refreshPending` 不重置冲突基线。设置可显式重新读取目录。重新授权只能用户点击触发，不自动循环；保留原生权限验收。
+- 本应用缓存清除需应用内确认，清除最近记录、搜索及恢复副本，不删除本地文件。UI 偏好/完整诊断及其他余项仍由 V0.1_TASKS 追踪。
+
 状态：开发实施基线。日期：2026-09-26。数据字段、状态枚举及文件路径引用 [DATA_SCHEMA.md](DATA_SCHEMA.md)。本文的崩溃恢复和冲突策略是对 PRD 的工程补充；不新增云端功能。
 
 ## 1. 固定决策

@@ -14,15 +14,25 @@ export function usePromptEditor(view: WorkspaceView | null, updateView: () => vo
     if (!current.document || current.editSeq === current.persistedSeq) return true;
     if (current.error) return false;
     const { meta } = current.document;
+    const sessionId = api.view()?.sessionId;
+    const stillCurrent = () => {
+      const active = useEditorStore.getState().document?.meta;
+      return (
+        api.view()?.sessionId === sessionId &&
+        active?.projectId === meta.projectId &&
+        active.id === meta.id
+      );
+    };
     const seq = current.editSeq,
       body = current.body;
     useEditorStore.setState({ saveState: 'saving' });
     const promise = (async () => {
       const result = await api.run((runtime) => runtime.saveDraft(meta.projectId, meta.id, body));
+      if (!stillCurrent()) return false;
       if (!result.ok) {
         useEditorStore.setState({ saveState: 'failed', error: result.error });
-        const pending = await api.run((runtime) => runtime.load());
-        if (pending.ok) updateView();
+        const pending = await api.run((runtime) => runtime.refreshPending());
+        if (pending.ok && stillCurrent()) updateView();
         return false;
       }
       useEditorStore.setState((state) => ({

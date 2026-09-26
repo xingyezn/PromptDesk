@@ -1,9 +1,11 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 export function MarkdownPreview({ body }: { body: string }) {
   return (
     <div className="markdown-preview">
       <ReactMarkdown
         skipHtml
+        remarkPlugins={[remarkGfm]}
         components={{
           img: () => null,
           a: ({ href, children }) =>

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowUpRight,
@@ -15,22 +15,33 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
-import { statusLabels, statusSchema, type PromptStatus } from '../domain/schemas';
+import { WorkspaceSettings } from '../components/WorkspaceSettings';
+import { MetadataForm, type MetadataInput } from '../components/MetadataForm';
+import { PromptQueue } from '../components/PromptQueue';
+import { ScratchpadWorkspace } from '../components/ScratchpadWorkspace';
+import {
+  statusLabels,
+  statusSchema,
+  versionReasonLabels,
+  type PromptStatus,
+} from '../domain/schemas';
 import { ordered, tokenEstimate } from '../domain/policies';
 import { workspaceController as api, type CreationPlan } from '../services/workspace/controller';
 import { copyText } from '../services/clipboard/clipboard';
 import type { OpenPrompt, WorkspaceView } from '../services/workspace/runtime';
 import type { Result } from '../types/errors';
+import { AppFault } from '../types/errors';
 import { useEditorStore } from '../stores/editor';
 import { usePromptEditor } from '../hooks/usePromptEditor';
 
 type Dialog =
   | { kind: 'workspace'; name: string; plan: CreationPlan }
   | { kind: 'project'; name: string; id: string | null }
-  | { kind: 'prompt'; name: string; projectId: string }
+  | { kind: 'rename-prompt'; name: string; projectId: string; id: string }
   | { kind: 'delete-project'; id: string }
   | { kind: 'delete-prompt'; projectId: string; id: string }
   | { kind: 'restore'; number: number }
+  | { kind: 'reload-disk'; document: OpenPrompt; body: string }
   | { kind: 'recovery-draft'; document: OpenPrompt; body: string };
 const savedLabels = {
   saved: '已保存到工作空间',
@@ -56,13 +67,33 @@ export function App() {
   const [historyBody, setHistoryBody] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [listView, setListView] = useState(false);
+  const [details, setDetails] = useState<'project' | 'prompt' | null>(null);
+  const [protectedDraft, setProtectedDraft] = useState<{ sessionId: string; body: string } | null>(
+    null,
+  );
   const navigate = useNavigate(),
     location = useLocation();
   const updateView = useCallback(() => setView(api.view()), []);
-  const { editor, flush } = usePromptEditor(view, updateView);
+  const { editor, flush: flushPrompt } = usePromptEditor(view, updateView);
+  const scratchFlush = useRef<(() => Promise<boolean>) | null>(null);
+  const registerScratchFlush = useCallback((callback: (() => Promise<boolean>) | null) => {
+    scratchFlush.current = callback;
+  }, []);
+  const flush = useCallback(
+    async () =>
+      (await flushPrompt()) && (scratchFlush.current ? await scratchFlush.current() : true),
+    [flushPrompt],
+  );
   const consume = <T,>(result: Result<T>): T | undefined => {
     if (!result.ok) {
       if (result.error.code !== 'CANCELLED') setMessage(result.error.message);
+      const sessionId = api.view()?.sessionId;
+      if (sessionId)
+        void api
+          .run((runtime) => runtime.refreshPending())
+          .then((next) => {
+            if (next.ok && next.value.sessionId === api.view()?.sessionId) setView(next.value);
+          });
       return undefined;
     }
     setMessage('');
@@ -73,6 +104,32 @@ export function App() {
       if (result.ok) setRecents(result.value);
     });
   }, []);
+  const activeSessionId = view?.sessionId;
+  useEffect(() => {
+    if (!activeSessionId) return;
+    let disposed = false;
+    const sessionId = activeSessionId;
+    const inspect = () => {
+      const meta = useEditorStore.getState().document?.meta;
+      void api
+        .run((runtime) =>
+          runtime.externalChanges(meta ? { projectId: meta.projectId, id: meta.id } : undefined),
+        )
+        .then((result) => {
+          if (disposed || api.view()?.sessionId !== sessionId || !result.ok || !result.value.length)
+            return;
+          setMessage('本地文件已在其他程序中改变，请保留草稿后重新加载。');
+          const current = useEditorStore.getState();
+          if (current.document)
+            useEditorStore.setState({ error: new AppFault('CONFLICT'), saveState: 'failed' });
+        });
+    };
+    window.addEventListener('focus', inspect);
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', inspect);
+    };
+  }, [activeSessionId]);
   const openDoc = async (projectId: string, id: string) => {
     setBusy(true);
     try {
@@ -83,6 +140,7 @@ export function App() {
       useEditorStore.getState().load(doc);
       updateView();
       setShowVersions(false);
+      setPreview(false);
       setHistoryBody(null);
       navigate(`/project/${projectId}/prompt/${id}`);
       const draft = await api.getRecoveryDraft(`prompt:${projectId}:${id}`);
@@ -92,6 +150,44 @@ export function App() {
       setBusy(false);
     }
   };
+  async function createPrompt(projectId: string, parentPromptId?: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (!(await flush())) return;
+      const meta = consume(
+        await api.run((runtime) =>
+          parentPromptId
+            ? runtime.createNext(projectId, parentPromptId)
+            : runtime.createPrompt(projectId),
+        ),
+      );
+      if (meta) await openDoc(meta.projectId, meta.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function changeListedStatus(projectId: string, id: string, status: PromptStatus) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (!(await flush())) return;
+      const current = useEditorStore.getState().document;
+      const selected = current?.meta.projectId === projectId && current.meta.id === id;
+      const result = await api.run((runtime) =>
+        selected
+          ? runtime.checkpoint(projectId, id, useEditorStore.getState().body, status)
+          : runtime.transitionStoredPrompt(projectId, id, status),
+      );
+      const updated = consume(result);
+      if (updated && selected) useEditorStore.getState().load(updated);
+      if (!result.ok) await api.run((runtime) => runtime.refreshPending());
+      updateView();
+      if (updated) setMessage('状态已更新');
+    } finally {
+      setBusy(false);
+    }
+  }
   const projectId = location.pathname.split('/')[2];
   const project = view?.projects.find((p) => p.id === projectId);
   const doc = editor.document;
@@ -101,6 +197,10 @@ export function App() {
     !view?.writable ||
     !!view.pending.length ||
     currentProject?.status === 'archived' ||
+    !!(
+      currentProject &&
+      view?.issues.some((issue) => issue.startsWith(`projects/${currentProject.slug}/`))
+    ) ||
     !!currentProject?.deletedAt ||
     doc?.meta.status === 'archived' ||
     !!doc?.meta.deletedAt;
@@ -114,6 +214,74 @@ export function App() {
           `${p.title} ${p.target} ${p.tags.join(' ')}`.toLowerCase().includes(query.toLowerCase())),
     ),
   );
+  async function saveDetails(input: MetadataInput) {
+    setBusy(true);
+    try {
+      if (!(await flush())) return;
+      if (details === 'project' && project) {
+        const next = consume(
+          await api.run((runtime) =>
+            runtime.updateProject(project.id, {
+              name: input.name,
+              tags: input.tags,
+              description: input.description,
+            }),
+          ),
+        );
+        if (next) {
+          setView(next);
+          setDetails(null);
+        }
+      } else if (doc) {
+        const next = consume(
+          await api.run((runtime) =>
+            runtime.updatePrompt(doc.meta.projectId, doc.meta.id, {
+              title: input.name,
+              tags: input.tags,
+              target: input.target,
+              notes: input.notes,
+            }),
+          ),
+        );
+        if (next) {
+          useEditorStore.setState((state) =>
+            state.document ? { document: { ...state.document, meta: next } } : {},
+          );
+          updateView();
+          setDetails(null);
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function movePrompt(id: string, direction: -1 | 1) {
+    if (!project || busy) return;
+    setBusy(true);
+    try {
+      if (!(await flush())) return;
+      const ids = ordered(
+        view?.prompts.filter((p) => p.projectId === project.id && !p.deletedAt) ?? [],
+      ).map((p) => p.id);
+      const from = ids.indexOf(id),
+        to = from + direction;
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      [ids[from], ids[to]] = [ids[to]!, ids[from]!];
+      const next = consume(await api.run((runtime) => runtime.reorder(project.id, ids)));
+      if (next) {
+        setView(next);
+        useEditorStore.setState((state) => {
+          const meta = next.prompts.find(
+            (p) =>
+              p.id === state.document?.meta.id && p.projectId === state.document.meta.projectId,
+          );
+          return meta && state.document ? { document: { ...state.document, meta } } : {};
+        });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
   const counts = Object.fromEntries(
     statusSchema.options.map((status) => [
       status,
@@ -134,13 +302,17 @@ export function App() {
       if (!(await flush())) return;
       const state = useEditorStore.getState();
       if (!state.document) return;
+      const sessionId = api.view()?.sessionId;
       const meta = state.document.meta;
       const seq = state.editSeq;
       const result = await api.run((runtime) =>
         runtime.checkpoint(meta.projectId, meta.id, state.body, next),
       );
+      if (api.view()?.sessionId !== sessionId) return;
       if (!result.ok) {
         setMessage(result.error.message);
+        await api.run((runtime) => runtime.refreshPending());
+        updateView();
         return;
       }
       useEditorStore.setState((current) => {
@@ -170,7 +342,9 @@ export function App() {
       }
       if (event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        document.getElementById('prompt-search')?.focus();
+        (
+          document.getElementById('prompt-search') ?? document.getElementById('global-search')
+        )?.focus();
       }
       if (event.shiftKey && event.key.toLowerCase() === 'c') {
         event.preventDefault();
@@ -208,9 +382,12 @@ export function App() {
           const p = dialog.id ?? next.projects.at(-1)?.id;
           if (p) navigate(`/project/${p}`);
         }
-      } else if (dialog.kind === 'prompt') {
+      } else if (dialog.kind === 'rename-prompt') {
+        if (!(await flush())) return;
         const meta = consume(
-          await api.run((runtime) => runtime.createPrompt(dialog.projectId, dialog.name)),
+          await api.run((runtime) =>
+            runtime.updatePrompt(dialog.projectId, dialog.id, { title: dialog.name }),
+          ),
         );
         if (meta) {
           updateView();
@@ -253,6 +430,18 @@ export function App() {
           useEditorStore.getState().load(restored);
           updateView();
           setHistoryBody(null);
+          setDialog(null);
+        }
+      } else if (dialog.kind === 'reload-disk') {
+        const meta = dialog.document.meta;
+        const sessionId = view?.sessionId;
+        const next = consume(
+          await api.run((runtime) => runtime.openPrompt(meta.projectId, meta.id)),
+        );
+        if (next && sessionId) {
+          setProtectedDraft({ sessionId, body: dialog.body });
+          useEditorStore.getState().load(next);
+          updateView();
           setDialog(null);
         }
       } else {
@@ -319,13 +508,15 @@ export function App() {
           ? '创建本地工作空间'
           : dialog.kind === 'project'
             ? '项目名称'
-            : dialog.kind === 'prompt'
-              ? '新建 Prompt'
+            : dialog.kind === 'rename-prompt'
+              ? '修改 Prompt 标题'
               : dialog.kind === 'restore'
                 ? '恢复历史版本'
-                : dialog.kind === 'recovery-draft'
-                  ? '发现未保存的恢复副本'
-                  : '确认删除'
+                : dialog.kind === 'reload-disk'
+                  ? '保留草稿并重新加载磁盘'
+                  : dialog.kind === 'recovery-draft'
+                    ? '发现未保存的恢复副本'
+                    : '确认删除'
       }
       onClose={() => {
         if (!busy) setDialog(null);
@@ -369,12 +560,25 @@ export function App() {
               ? `恢复 V${dialog.number} 将先保留当前草稿，再创建一个新的恢复版本。状态不会自动改变。`
               : dialog.kind === 'recovery-draft'
                 ? '发现浏览器中保留的未保存文本。磁盘内容已读取；选择恢复只会将副本放回编辑器，不会直接覆盖文件。'
-                : '删除后会从默认列表隐藏，目录和历史版本仍然保留，可以在“已删除”中恢复。'}
+                : dialog.kind === 'reload-disk'
+                  ? '当前草稿将保留在本次会话中，供继续查看和复制；编辑器会重新读取磁盘文件。'
+                  : '删除后会从默认列表隐藏，目录和历史版本仍然保留，可以在“已删除”中恢复。'}
           </p>
-          {dialog.kind === 'recovery-draft' && (
+          {(dialog.kind === 'recovery-draft' || dialog.kind === 'reload-disk') && (
             <pre className="draft-snippet">{dialog.body.slice(0, 1000)}</pre>
           )}
           <footer>
+            {(dialog.kind === 'recovery-draft' || dialog.kind === 'reload-disk') && (
+              <button
+                onClick={() =>
+                  void copyText(dialog.body).then((result) =>
+                    setMessage(result.ok ? '保留草稿已复制' : '复制失败，请手动复制。'),
+                  )
+                }
+              >
+                复制保留草稿
+              </button>
+            )}
             <button onClick={() => setDialog(null)}>取消</button>
             <button className="primary" disabled={busy} onClick={() => void submitDialog()}>
               {dialog.kind === 'recovery-draft' ? '恢复到编辑器' : '确认'}
@@ -543,6 +747,10 @@ export function App() {
           )}
         </div>
         <div className="sidebar-bottom">
+          <button className="nav-item" onClick={() => void go('/scratchpad')}>
+            <FileText size={18} />
+            临时草稿
+          </button>
           <button className="nav-item" onClick={() => void go('/deleted')}>
             <Trash2 size={17} />
             已删除
@@ -563,12 +771,32 @@ export function App() {
             {project?.name ??
               (location.pathname === '/settings'
                 ? '设置'
-                : location.pathname === '/deleted'
-                  ? '已删除'
-                  : '我的工作台')}
+                : location.pathname === '/scratchpad'
+                  ? '临时草稿'
+                  : location.pathname === '/deleted'
+                    ? '已删除'
+                    : '我的工作台')}
           </span>
           <span className="beta">开发预览</span>
         </header>
+        {protectedDraft?.sessionId === view.sessionId && (
+          <div className="notice">
+            冲突前的草稿仍保留在本次会话中。
+            <button
+              onClick={() =>
+                void copyText(protectedDraft.body).then((result) =>
+                  setMessage(result.ok ? '保留草稿已复制' : '复制失败，请查看后手动复制。'),
+                )
+              }
+            >
+              复制保留草稿
+            </button>
+            <details>
+              <summary>查看保留草稿</summary>
+              <pre className="draft-snippet">{protectedDraft.body}</pre>
+            </details>
+          </div>
+        )}
         {(message || editor.error || !api.cacheAvailable || !view.writable) && (
           <div className="notice global-notice" role="status">
             {editor.error?.message ||
@@ -589,16 +817,23 @@ export function App() {
                 <button onClick={() => void copyText(editor.body)}>复制未保存内容</button>
                 <button
                   onClick={() => {
-                    if (doc)
-                      void api
-                        .run((runtime) => runtime.openPrompt(doc.meta.projectId, doc.meta.id))
-                        .then((result) => {
-                          const next = consume(result);
-                          if (next) useEditorStore.getState().load(next);
-                        });
+                    if (doc) setDialog({ kind: 'reload-disk', document: doc, body: editor.body });
                   }}
                 >
                   重新加载磁盘
+                </button>
+                <button
+                  onClick={() =>
+                    void api
+                      .reauthorize()
+                      .then((result) =>
+                        setMessage(
+                          result.ok ? '目录已重新授权，请重试保存。' : result.error.message,
+                        ),
+                      )
+                  }
+                >
+                  重新授权目录
                 </button>
               </>
             )}
@@ -631,46 +866,31 @@ export function App() {
               </div>
             ))}
           </section>
+        ) : location.pathname === '/scratchpad' ? (
+          <ScratchpadWorkspace
+            key={view.sessionId}
+            view={view}
+            busy={busy}
+            setBusy={setBusy}
+            onView={updateView}
+            onMessage={setMessage}
+            onOpenPrompt={openDoc}
+            registerFlush={registerScratchFlush}
+          />
         ) : location.pathname === '/settings' ? (
-          <section className="page">
-            <span className="eyebrow">WORKSPACE SETTINGS</span>
-            <h1>设置</h1>
-            <div className="settings-card">
-              <h2>{view.workspace.name}</h2>
-              <p>
-                自动保存：{view.settings.autosaveEnabled ? '开启' : '关闭'} ·{' '}
-                {view.settings.autosaveDelayMs}ms
-              </p>
-              <p>默认目标：{view.settings.defaultTarget}</p>
-              <p className="muted">
-                当前开发阶段已支持文件落盘、版本和目录恢复；设置编辑、全文搜索及临时草稿区将在后续任务中实现。
-              </p>
-              <button
-                onClick={() =>
-                  void api.recent().then((result) => {
-                    if (result.ok) setRecents(result.value);
-                  })
-                }
-              >
-                刷新最近目录
-              </button>
-              <button
-                onClick={() =>
-                  void (async () => {
-                    if (!(await flush())) return;
-                    const result = await api.close();
-                    if (result.ok) {
-                      setView(null);
-                      useEditorStore.getState().load(null);
-                      navigate('/');
-                    }
-                  })()
-                }
-              >
-                关闭工作空间
-              </button>
-            </div>
-          </section>
+          <WorkspaceSettings
+            key={view.sessionId}
+            view={view}
+            busy={busy}
+            setBusy={setBusy}
+            onView={setView}
+            onMessage={setMessage}
+            onClose={() => {
+              setView(null);
+              useEditorStore.getState().load(null);
+              navigate('/');
+            }}
+          />
         ) : location.pathname === '/deleted' ? (
           <section className="page">
             <h1>已删除</h1>
@@ -712,6 +932,27 @@ export function App() {
                     }
                   >
                     恢复 Prompt
+                  </button>
+                </div>
+              ))}
+            {view.scratchpads
+              .filter((scratch) => scratch.deletedAt)
+              .map((scratch) => (
+                <div className="deleted-row" key={scratch.id}>
+                  <FileText size={18} />
+                  {scratch.title}
+                  <button
+                    disabled={busy || !view.writable}
+                    onClick={() =>
+                      void api
+                        .run((runtime) => runtime.setScratchDeleted(scratch.id, false))
+                        .then((result) => {
+                          const next = consume(result);
+                          if (next) setView(next);
+                        })
+                    }
+                  >
+                    恢复临时草稿
                   </button>
                 </div>
               ))}
@@ -775,6 +1016,15 @@ export function App() {
                 </div>
               )}
             </div>
+            <PromptQueue
+              key={view.sessionId}
+              view={view}
+              busy={busy}
+              onOpen={openDoc}
+              onStatus={changeListedStatus}
+              onMessage={setMessage}
+              onView={updateView}
+            />
           </section>
         ) : (
           <div className="project-workspace">
@@ -785,8 +1035,8 @@ export function App() {
                 </h2>
                 <button
                   aria-label="新建 Prompt"
-                  disabled={!view.writable || project.status === 'archived'}
-                  onClick={() => setDialog({ kind: 'prompt', name: '', projectId: project.id })}
+                  disabled={busy || !view.writable || project.status === 'archived'}
+                  onClick={() => void createPrompt(project.id)}
                 >
                   <Plus size={18} />
                 </button>
@@ -811,20 +1061,88 @@ export function App() {
               </div>
               <div className={listView ? 'prompt-items' : 'prompt-items flow'}>
                 {visiblePrompts.map((p) => (
-                  <button
+                  <div
                     className={`prompt-card ${doc?.meta.id === p.id && doc.meta.projectId === p.projectId ? 'active' : ''}`}
                     key={p.id}
-                    onClick={() => void openDoc(project.id, p.id)}
                   >
                     <span className={`status-dot ${p.status}`} />
                     <div>
-                      <small>
-                        {p.id} · {p.target}
-                      </small>
-                      <h3>{p.title}</h3>
-                      <span className={`status-label ${p.status}`}>{statusLabels[p.status]}</span>
+                      <button
+                        className="prompt-open"
+                        disabled={busy}
+                        onClick={() => void openDoc(project.id, p.id)}
+                        aria-label={`打开 ${p.id} ${p.title}`}
+                      >
+                        <small>
+                          {p.id} · {p.target}
+                        </small>
+                        <h3>{p.title}</h3>
+                      </button>
+                      <select
+                        className={`status-label ${p.status}`}
+                        aria-label={`${p.id} 列表状态`}
+                        value={p.status}
+                        disabled={busy || !view.writable || project.status === 'archived'}
+                        onChange={(event) =>
+                          void changeListedStatus(
+                            p.projectId,
+                            p.id,
+                            statusSchema.parse(event.target.value),
+                          )
+                        }
+                      >
+                        {statusSchema.options.map((s) => (
+                          <option key={s} value={s}>
+                            {statusLabels[s]}
+                          </option>
+                        ))}
+                      </select>
+                      {p.parentPromptId && (
+                        <small className="parent-label">
+                          前置 {p.parentPromptId}
+                          {view.prompts.find(
+                            (parent) =>
+                              parent.projectId === p.projectId && parent.id === p.parentPromptId,
+                          )?.deletedAt
+                            ? '（已删除）'
+                            : ''}
+                        </small>
+                      )}
+                      <div className="order-controls">
+                        <button
+                          aria-label={`上移 ${p.id}`}
+                          disabled={
+                            busy ||
+                            !view.writable ||
+                            project.status === 'archived' ||
+                            p.status === 'archived' ||
+                            !!query ||
+                            p.order === 1
+                          }
+                          onClick={() => void movePrompt(p.id, -1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          aria-label={`下移 ${p.id}`}
+                          disabled={
+                            busy ||
+                            !view.writable ||
+                            project.status === 'archived' ||
+                            p.status === 'archived' ||
+                            !!query ||
+                            p.order ===
+                              view.prompts.filter(
+                                (item) => item.projectId === project.id && !item.deletedAt,
+                              ).length
+                          }
+                          onClick={() => void movePrompt(p.id, 1)}
+                        >
+                          ↓
+                        </button>
+                      </div>
                     </div>
-                  </button>
+                  </div>
                 ))}
                 {!visiblePrompts.length && (
                   <div className="list-empty">
@@ -835,7 +1153,13 @@ export function App() {
               </div>
               <div className="project-controls">
                 <button
-                  disabled={!view.writable}
+                  disabled={busy || !view.writable || project.status === 'archived'}
+                  onClick={() => setDetails('project')}
+                >
+                  项目资料
+                </button>
+                <button
+                  disabled={busy || !view.writable || project.status === 'archived'}
                   onClick={() => setDialog({ kind: 'project', name: project.name, id: project.id })}
                 >
                   重命名
@@ -877,7 +1201,7 @@ export function App() {
                       <select
                         aria-label="Prompt 状态"
                         value={doc.meta.status}
-                        disabled={!view.writable || project.status === 'archived'}
+                        disabled={busy || !view.writable || project.status === 'archived'}
                         onChange={(event) =>
                           void checkpoint(statusSchema.parse(event.target.value))
                         }
@@ -890,6 +1214,30 @@ export function App() {
                       </select>
                       <span>{doc.meta.target}</span>
                       <span>V{doc.meta.currentVersion}</span>
+                      {doc.meta.submittedVersion && (
+                        <span>已提交 V{doc.meta.submittedVersion}</span>
+                      )}
+                      {doc.meta.versions.length > 0 &&
+                        (editor.editSeq !== editor.persistedSeq ||
+                          doc.baseContentHash !== doc.meta.versions.at(-1)?.contentHash) && (
+                          <span>当前草稿与最新版本不同</span>
+                        )}
+                      <button disabled={readonly} onClick={() => setDetails('prompt')}>
+                        资料与标签
+                      </button>
+                      <button
+                        disabled={readonly}
+                        onClick={() =>
+                          setDialog({
+                            kind: 'rename-prompt',
+                            projectId: project.id,
+                            id: doc.meta.id,
+                            name: doc.meta.title,
+                          })
+                        }
+                      >
+                        修改标题
+                      </button>
                       <button
                         aria-label="删除 Prompt"
                         disabled={readonly}
@@ -952,6 +1300,49 @@ export function App() {
                         <Plus size={16} />
                         保存版本
                       </button>
+                      <button disabled={readonly} onClick={() => void flush()}>
+                        保存草稿
+                      </button>
+                      <button
+                        disabled={readonly}
+                        onClick={() => void createPrompt(project.id, doc.meta.id)}
+                      >
+                        下一条
+                      </button>
+                      {doc.meta.status === 'submitted' && (
+                        <button
+                          disabled={readonly}
+                          onClick={() =>
+                            void (async () => {
+                              setBusy(true);
+                              try {
+                                if (!(await flush())) return;
+                                const state = useEditorStore.getState();
+                                const next = consume(
+                                  await api.run((runtime) =>
+                                    runtime.checkpoint(
+                                      project.id,
+                                      doc.meta.id,
+                                      state.body,
+                                      'submitted',
+                                      true,
+                                    ),
+                                  ),
+                                );
+                                if (next) {
+                                  useEditorStore.getState().load(next);
+                                  updateView();
+                                  setMessage('已记录再次提交');
+                                }
+                              } finally {
+                                setBusy(false);
+                              }
+                            })()
+                          }
+                        >
+                          再次标记提交
+                        </button>
+                      )}
                       <button
                         className="primary"
                         onClick={() =>
@@ -976,7 +1367,7 @@ export function App() {
                       {[...doc.meta.versions].reverse().map((v) => (
                         <div className="version-row" key={v.number}>
                           <span>
-                            <strong>V{v.number}</strong> · {v.reason}
+                            <strong>V{v.number}</strong> · {versionReasonLabels[v.reason]}
                             <small>{new Date(v.createdAt).toLocaleString()}</small>
                           </span>
                           <button
@@ -1007,6 +1398,19 @@ export function App() {
                         </p>
                       )}
                       {historyBody !== null && <pre className="history-body">{historyBody}</pre>}
+                      <details>
+                        <summary>状态记录（{doc.meta.statusHistory.length}）</summary>
+                        <ol>
+                          {doc.meta.statusHistory.map((event) => (
+                            <li key={event.id}>
+                              {event.from ? statusLabels[event.from] : '创建'} →{' '}
+                              {statusLabels[event.to]} · {new Date(event.at).toLocaleString()}
+                              {event.kind === 'resubmit' ? ' · 再次提交' : ''}
+                              {event.versionNumber ? ` · V${event.versionNumber}` : ''}
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
                     </div>
                   )}
                 </>
@@ -1017,8 +1421,8 @@ export function App() {
                   <p>选择一条 Prompt 开始编辑，或新建一条。</p>
                   <button
                     className="primary"
-                    disabled={!view.writable || project.status === 'archived'}
-                    onClick={() => setDialog({ kind: 'prompt', name: '', projectId: project.id })}
+                    disabled={busy || !view.writable || project.status === 'archived'}
+                    onClick={() => void createPrompt(project.id)}
                   >
                     <Plus size={16} />
                     新建 Prompt
@@ -1030,6 +1434,38 @@ export function App() {
         )}
       </div>
       {modal}
+      {details && project && (
+        <Modal
+          title={details === 'project' ? '项目资料' : 'Prompt 资料'}
+          onClose={() => {
+            if (!busy) setDetails(null);
+          }}
+        >
+          <MetadataForm
+            key={`${details}:${project.id}:${doc?.meta.id ?? ''}`}
+            kind={details}
+            disabled={busy}
+            onSave={saveDetails}
+            initial={
+              details === 'project'
+                ? {
+                    name: project.name,
+                    tags: project.tags,
+                    description: project.description,
+                    target: '',
+                    notes: '',
+                  }
+                : {
+                    name: doc?.meta.title ?? '',
+                    tags: doc?.meta.tags ?? [],
+                    description: '',
+                    target: doc?.meta.target ?? 'Codex',
+                    notes: doc?.meta.notes ?? '',
+                  }
+            }
+          />
+        </Modal>
+      )}
     </div>
   );
 }

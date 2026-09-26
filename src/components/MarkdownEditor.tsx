@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
+import { markdown, markdownKeymap } from '@codemirror/lang-markdown';
+import { formatLabels, formatSelection, type FormatKind } from '../domain/formatting';
 
 export function MarkdownEditor({
   body,
@@ -31,7 +32,7 @@ export function MarkdownEditor({
           lineNumbers(),
           drawSelection(),
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
           EditorView.lineWrapping,
           EditorView.editable.of(!readonly),
           EditorState.readOnly.of(readonly),
@@ -56,6 +57,7 @@ export function MarkdownEditor({
       }),
     });
     view.current = editor;
+    if (!readonly) editor.focus();
     return () => {
       editor.destroy();
       view.current = null;
@@ -71,5 +73,38 @@ export function MarkdownEditor({
       syncing.current = false;
     }
   }, [body]);
-  return <div className="markdown-editor" ref={host} />;
+  const applyFormat = (kind: FormatKind) => {
+    const editor = view.current;
+    if (!editor || readonly) return;
+    const { from, to } = editor.state.selection.main;
+    const block = kind !== 'bold';
+    const start = block ? editor.state.doc.lineAt(from).from : from;
+    const end = block ? editor.state.doc.lineAt(to > from ? to - 1 : to).to : to;
+    const insert = formatSelection(kind, editor.state.sliceDoc(start, end));
+    editor.dispatch({
+      changes: { from: start, to: end, insert },
+      selection: { anchor: start + insert.length },
+      userEvent: 'input',
+    });
+    editor.focus();
+  };
+  return (
+    <div className="markdown-composer">
+      <div className="format-toolbar" role="toolbar" aria-label="Markdown 格式">
+        {(Object.keys(formatLabels) as FormatKind[]).map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            disabled={readonly}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => applyFormat(kind)}
+          >
+            {formatLabels[kind]}
+          </button>
+        ))}
+        <small>选择多行可转列表；制表符分隔文本可转表格</small>
+      </div>
+      <div className="markdown-editor" ref={host} />
+    </div>
+  );
 }

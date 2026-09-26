@@ -1,6 +1,7 @@
 import Dexie, { type Table } from 'dexie';
 import { newId } from '../../domain/schemas';
 import { AppFault, attempt } from '../../types/errors';
+import { NativeFileSystem } from '../filesystem/native';
 
 interface Recent {
   recentKey: string;
@@ -18,9 +19,19 @@ export interface RecoveryDraft {
   baseContentHash: string;
   updatedAt: string;
 }
+export interface SearchCacheEntry {
+  workspaceId: string;
+  recentKey: string;
+  projectId: string;
+  promptId: string;
+  body: string;
+  contentHash: string;
+  revision: number;
+}
 class CacheDatabase extends Dexie {
   recentWorkspaces!: Table<Recent, string>;
   recoveryDrafts!: Table<RecoveryDraft, [string, string, string]>;
+  searchIndex!: Table<SearchCacheEntry, [string, string, string]>;
   constructor() {
     super('promptdesk-cache');
     this.version(1).stores({
@@ -56,7 +67,7 @@ export class CacheService {
     if (recent.ok) {
       for (const item of recent.value) {
         try {
-          if (await item.directoryHandle.isSameEntry(handle)) {
+          if (await NativeFileSystem.sameEntry(item.directoryHandle, handle)) {
             key = item.recentKey;
             break;
           }
@@ -89,6 +100,19 @@ export class CacheService {
         const key: [string, string, string] = [workspaceId, recentKey, entityKey];
         const value = await this.db.recoveryDrafts.get(key);
         if (value && value.editSeq <= editSeq) await this.db.recoveryDrafts.delete(key);
+      }),
+    );
+  }
+  putSearch(entry: SearchCacheEntry) {
+    return this.safe(() => this.db.searchIndex.put(entry));
+  }
+  clearSearch(workspaceId: string) {
+    return this.safe(() => this.db.searchIndex.where('workspaceId').equals(workspaceId).delete());
+  }
+  clearAll() {
+    return this.safe(() =>
+      this.db.transaction('rw', this.db.tables, async () => {
+        for (const table of this.db.tables) await table.clear();
       }),
     );
   }

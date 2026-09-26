@@ -2,9 +2,11 @@
 
 部署于 GitHub Pages 的本地优先 Prompt 工作台。用 Project → Prompt → Version 管理提示词，用状态追踪构思、提交和完成过程。编辑器中的 Enter 只换行；应用没有向模型发送内容的功能。
 
-依据《PromptDesk PRD V0.1》开发，当前版本为 `0.1.0-dev.1`。第一批本地工作流已经实现并通过合成测试，尚未完成完整 V0.1 和真实 GitHub Pages 部署。开发进度见 V0.1_TASKS，验证及未完成项见 [开发预览验证记录](docs/qa/2026-09-26-development-preview.md)。
+依据《PromptDesk PRD V0.1》开发，当前版本为 `0.1.0-dev.3`。本地工作流与管理功能已逐批实现并通过合成测试，尚未完成全部发布验收和真实 GitHub Pages 部署。开发进度见 V0.1_TASKS，初始基线见 [开发预览验证记录](docs/qa/2026-09-26-development-preview.md)。
 
-目前可试用：创建/打开本地工作空间、项目与 Prompt、Markdown 自动保存、复制、状态切换、版本查看和保护草稿的历史恢复、逻辑删除/恢复。全文搜索、Scratchpad、下一条 Prompt 和可编辑设置仍在后续任务中。
+整体开发与最终产品计划见 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)，涵盖现有预览到完整本地工作台及正式发布的全部里程碑。新增的备份迁移和写作操作纳入原有计划，原有未完成任务继续保留。
+
+目前可试用：创建/打开本地工作空间、项目与 Prompt、资料/标签/模型/备注、Markdown 自动保存、复制、状态/再次提交、版本查看和保护草稿的历史恢复、逻辑删除/恢复、下一条和排序、跨项目队列/全文搜索、临时草稿及转入项目。新增无标题弹窗创建、列表改状态、格式工具、可编辑设置、应用文件查看、ZIP 备份和复制迁移，见 [工作空间管理验证](docs/qa/2026-09-26-workspace-management.md) 和 [工作流验证](docs/qa/2026-09-26-planning-workflow.md)。不能将开发预览视为最终产品。
 
 ## 1. 文档导航
 
@@ -25,6 +27,7 @@
 - 明确保存版本、进入待提交/标记提交时创建检查点；查看和恢复历史版本。
 - Flow/List 视图、Dashboard 待办队列、跨项目本地搜索、Scratchpad 临时草稿和转入项目。
 - 设置、快捷键、损坏文件隔离、外部修改冲突提示和可恢复的删除。
+- 用户追加范围：无标题弹窗创建、列表修改状态、列表/表格格式工具、可编辑工作空间设置、本地应用文件查看、ZIP 备份、复制迁移到新目录。
 
 不包含账号、服务器、数据库服务、云同步、GitHub OAuth、LLM API、自动发送、自动读取模型对话、Kanban、版本 Diff 或完整 DAG。结果记录 UI 留到 V0.2；已有 result.md 原样保留。
 
@@ -61,6 +64,8 @@ npm run preview
 
 本地开发地址为 `http://127.0.0.1:5173/`。浏览器端到端测试首次运行需 `npx playwright install chromium`，然后 `npm run test:e2e`；Windows 已装 Edge 时可在 PowerShell 使用 `$env:PLAYWRIGHT_CHANNEL='msedge'; npm run test:e2e`。自动化使用合成目录，不替代原生目录授权验收。
 
+`npm run test:e2e:production` 会构建 `/PromptDesk/` 子路径产物，再在生产预览运行主要浏览器流程（Windows 同样可设置 PLAYWRIGHT_CHANNEL）。可通过 VITE_BASE_PATH 覆盖 base；不运行第二遍规模测试。CI 和部署构建都加入该检查，工作流尚未在远端执行。
+
 本地通过 localhost 打开；生产通过 HTTPS 打开，不能用双击 index.html 的方式运行。启动时检测安全上下文和目录选择能力；不支持时显示浏览器指引，不启用另一套虚拟 Workspace。目录选择必须由用户点击触发，句柄恢复后也可能需要重新授权，参见 [File System Access API 官方说明](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access)。
 
 ## 5. Workspace 使用
@@ -75,6 +80,10 @@ npm run preview
 只有格式符合 DATA_SCHEMA 的文件夹属于已有 Workspace。普通 Markdown 目录不会被自动转换；缺少标识文件只能在用户确认后初始化，不能擅自导入、重写或删除资料。
 
 浏览器不可靠地提供完整磁盘路径，界面使用 Workspace 名称和目录名。同一 Workspace 在不同电脑使用，前提是用户已自行复制整套文件；应用不负责同步。
+
+设置中可查看规范应用文件、修改默认目标和自动保存、清除本应用缓存。ZIP 打包最多 5000 文件、32 MiB；下载完成请在浏览器下载列表确认，解压至空目录后重新打开。迁移需选择空目录并确认，完成复制和逐个校验后切换，原目录保留；根目录其他资料不随应用数据迁移，应用目录出现未知文件先停止以免遗漏。
+
+工作台默认只搜索标题/项目/标签，点击“建立全文索引”后搜索正文；索引支持进度/取消，外部文件变化后点击刷新。临时草稿转入项目保留原文本并只读，可在“已转入”查看；转入目标是新 draft Prompt，没有自动版本。
 
 ## 6. GitHub Pages 部署（工作流已添加，尚未发布）
 

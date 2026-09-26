@@ -23,6 +23,9 @@ export class NativeFileSystem implements FileSystemPort {
   getHandle(): FileSystemDirectoryHandle {
     return this.root;
   } // Only cache/workspace services consume this.
+  static sameEntry(first: FileSystemDirectoryHandle, second: FileSystemDirectoryHandle) {
+    return first.isSameEntry(second);
+  }
   queryPermission(): Promise<PermissionState> {
     return this.root.queryPermission({ mode: 'readwrite' });
   }

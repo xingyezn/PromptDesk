@@ -49,6 +49,13 @@ export const statusSchema = z.enum([
   'archived',
 ]);
 export type PromptStatus = z.infer<typeof statusSchema>;
+export const versionReasonLabels = {
+  manual: '手动保存',
+  ready: '待提交检查点',
+  submitted: '提交检查点',
+  before_restore: '恢复前保护',
+  restore: '历史恢复',
+} as const;
 export const statusLabels: Record<PromptStatus, string> = {
   idea: '构思',
   draft: '草稿',

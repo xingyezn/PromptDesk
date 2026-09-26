@@ -13,12 +13,13 @@ import {
 import type { OpenPrompt, WorkspaceView } from '../../src/services/workspace/runtime';
 import { AppFault } from '../../src/types/errors';
 
-const mock = vi.hoisted(() => ({ run: vi.fn(), clear: vi.fn(), put: vi.fn() }));
+const mock = vi.hoisted(() => ({ run: vi.fn(), clear: vi.fn(), put: vi.fn(), view: vi.fn() }));
 vi.mock('../../src/services/workspace/controller', () => ({
   workspaceController: {
     run: mock.run,
     clearRecoveryDraft: mock.clear,
     putRecoveryDraft: mock.put,
+    view: mock.view,
   },
 }));
 function fixture() {
@@ -71,11 +72,13 @@ function fixture() {
     }),
     projects: [],
     prompts: [meta],
+    scratchpads: [],
     issues: [],
     pending: [],
     writable: true,
   };
   useEditorStore.getState().load(document);
+  mock.view.mockReturnValue(view);
   return { document, view };
 }
 function deferred<T>() {
@@ -91,6 +94,27 @@ afterEach(() => {
   useEditorStore.getState().load(null);
 });
 describe('autosave coordinator', () => {
+  it('ignores an old save completion after the workspace session changes', async () => {
+    const { document, view } = fixture();
+    const first = deferred<{ ok: true; value: OpenPrompt }>();
+    mock.run.mockReturnValueOnce(first.promise);
+    const { result } = renderHook(() => usePromptEditor(view, () => undefined));
+    act(() => useEditorStore.getState().edit('old session text'));
+    let saving: Promise<boolean>;
+    act(() => {
+      saving = result.current.flush();
+    });
+    act(() => {
+      mock.view.mockReturnValue({ ...view, sessionId: newId('session') });
+      useEditorStore.getState().load({ ...document, body: 'new session text' });
+    });
+    await act(async () => {
+      first.resolve({ ok: true, value: { ...document, body: 'old session text' } });
+      await saving!;
+    });
+    expect(useEditorStore.getState().body).toBe('new session text');
+    expect(useEditorStore.getState().document?.body).toBe('new session text');
+  });
   it('does not mark a newer edit saved when an old in-flight write completes', async () => {
     const { document, view } = fixture();
     const first = deferred<{ ok: true; value: OpenPrompt }>();

@@ -706,6 +706,7 @@ small {
 }
 .prompt-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 15px;
   font-size: 11px;
@@ -761,6 +762,246 @@ small {
   min-height: 100px;
   overflow: hidden;
 }
+.markdown-composer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.metadata-form {
+  display: grid;
+  gap: 15px;
+}
+.metadata-form textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+.parent-label {
+  display: block;
+  margin-top: 6px;
+}
+.order-controls {
+  display: flex;
+  gap: 5px;
+  margin-top: 8px;
+}
+.order-controls button {
+  padding: 2px 8px;
+}
+.queue-section {
+  margin-top: 35px;
+}
+.queue-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.queue-filters > input:first-child {
+  flex: 1 1 300px;
+}
+.queue-filters > input {
+  width: 130px;
+}
+.queue-filters label {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+.queue-filters input[type='checkbox'] {
+  width: auto;
+}
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+}
+.queue-row > button {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.queue-row small,
+.queue-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.queue-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.scratch-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+.scratch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scratch-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+}
+.scratch-list small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.scratch-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 540px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.scratch-editor > label {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  align-items: center;
+}
+.scratch-editor .settings-actions {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+.scratch-editor .cm-editor {
+  min-height: 320px;
+}
+@media (max-width: 650px) {
+  .scratch-layout {
+    grid-template-columns: 1fr;
+  }
+  .scratch-list {
+    flex-direction: row;
+    overflow: auto;
+  }
+  .scratch-list button {
+    flex-shrink: 0;
+  }
+}
+.format-toolbar {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.format-toolbar button {
+  font-size: 11px;
+  padding: 5px 8px;
+}
+.format-toolbar small {
+  width: 100%;
+  color: var(--muted);
+  font-size: 10px;
+}
+.prompt-open {
+  display: block;
+  text-align: left;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  width: 100%;
+  color: inherit;
+}
+.prompt-card select {
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.workspace-settings form {
+  display: grid;
+  gap: 15px;
+  max-width: 460px;
+}
+.workspace-settings label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+}
+.workspace-settings .checkbox-label {
+  display: flex;
+  align-items: center;
+}
+.workspace-settings input[type='checkbox'] {
+  width: auto;
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.workspace-files {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(200px, 2fr);
+  gap: 15px;
+  margin-top: 20px;
+}
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 360px;
+  overflow: auto;
+}
+.file-list button {
+  text-align: left;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.file-preview {
+  min-width: 0;
+  overflow: auto;
+}
+.file-preview strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.file-preview pre {
+  max-height: 360px;
+  overflow: auto;
+  font-size: 12px;
+  background: #f4f6ef;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.markdown-preview table {
+  border-collapse: collapse;
+  max-width: 100%;
+}
+.markdown-preview th,
+.markdown-preview td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+}
+.markdown-preview th {
+  background: #f4f6ef;
+}
+@media (max-width: 650px) {
+  .workspace-files {
+    grid-template-columns: 1fr;
+  }
+  .format-toolbar {
+    padding: 8px;
+  }
+}
 .markdown-preview {
   flex: 1;
   overflow: auto;
@@ -794,6 +1035,7 @@ small {
 }
 .editor-footer > div {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
 }
 .editor-footer button {
@@ -1075,7 +1317,7 @@ small {
   }
   .prompt-list {
     width: auto;
-    height: 190px;
+    height: 250px;
     flex-shrink: 0;
     padding: 14px;
     border-bottom: 1px solid var(--border);
@@ -1090,12 +1332,14 @@ small {
   }
   .prompt-items {
     display: flex;
+    align-items: flex-start;
     gap: 5px;
     padding-top: 8px;
   }
   .prompt-card {
     min-width: 180px;
     width: 180px;
+    flex-shrink: 0;
     padding: 8px;
   }
   .prompt-card h3 {

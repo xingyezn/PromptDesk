@@ -8,6 +8,7 @@ import {
   pendingSchema,
   projectSchema,
   promptSchema,
+  scratchpadSchema,
   settingsSchema,
   statusSchema,
   workspaceSchema,
@@ -29,6 +30,15 @@ import { AppFault, attempt } from '../../types/errors';
 import type { FileSystemPort } from '../../types/filesystem';
 import { sha256 } from '../../utils/hash';
 import { Journal, type Change } from '../transactions/journal';
+import {
+  captureSnapshot,
+  copySnapshot,
+  listWorkspaceFiles,
+  type WorkspaceSnapshot,
+} from './snapshot';
+import { isBusinessPath } from '../../domain/paths';
+import { initialPrompt } from '../../domain/prompt-factory';
+import { invalidPromptRelations } from '../../domain/relations';
 
 export interface WorkspaceView {
   sessionId: string;
@@ -36,12 +46,19 @@ export interface WorkspaceView {
   settings: WorkspaceSettings;
   projects: Project[];
   prompts: PromptMeta[];
+  scratchpads: ScratchMeta[];
   issues: string[];
   pending: PendingManifest[];
   writable: boolean;
 }
 export interface OpenPrompt {
   meta: PromptMeta;
+  body: string;
+  baseContentHash: string;
+}
+export type ScratchMeta = z.infer<typeof scratchpadSchema>;
+export interface OpenScratch {
+  meta: ScratchMeta;
   body: string;
   baseContentHash: string;
 }
@@ -52,10 +69,11 @@ export class WorkspaceRuntime {
   private readonly originals = new Map<string, string>();
   private projects: Project[] = [];
   private prompts: PromptMeta[] = [];
+  private scratchpads: ScratchMeta[] = [];
   private issues: string[] = [];
   private pending: PendingManifest[] = [];
   private closed = false;
-  readonly workspace: Workspace;
+  workspace: Workspace;
   private settings: WorkspaceSettings;
   writable = true;
 
@@ -159,6 +177,7 @@ export class WorkspaceRuntime {
       settings: this.settings,
       projects: [...this.projects],
       prompts: [...this.prompts],
+      scratchpads: [...this.scratchpads],
       issues: [...this.issues],
       pending: [...this.pending],
       writable: this.writable,
@@ -191,6 +210,11 @@ export class WorkspaceRuntime {
     kind: PendingManifest['kind'],
     operationId: string,
   ): Promise<void> {
+    for (const path of [workspacePath, settingsPath]) {
+      const expected = this.originals.get(path.join('/'));
+      if (!expected || (await this.fs.read(path))?.hash !== (await sha256(expected)))
+        throw new AppFault('CONFLICT');
+    }
     const parentPaths = new Set(
       changes
         .filter((change) => change.path[0] === 'projects' && change.path[2] === 'prompts')
@@ -210,8 +234,11 @@ export class WorkspaceRuntime {
     this.originals.clear();
     this.projects = [];
     this.prompts = [];
+    this.scratchpads = [];
     this.issues = [];
-    await this.tracked(workspaceSchema, workspacePath);
+    const workspace = await this.tracked(workspaceSchema, workspacePath);
+    if (workspace.id !== this.workspace.id) throw new AppFault('CONFLICT');
+    this.workspace = workspace;
     const settings = await this.fs.read(settingsPath);
     if (settings) {
       try {
@@ -221,6 +248,9 @@ export class WorkspaceRuntime {
         this.issues.push('.promptdesk/settings.json');
         this.writable = false;
       }
+    } else {
+      this.issues.push('.promptdesk/settings.json');
+      this.writable = false;
     }
     for (const dir of await this.fs.list(['projects'])) {
       if (dir.kind !== 'directory') continue;
@@ -246,7 +276,56 @@ export class WorkspaceRuntime {
         this.issues.push(projectFile.join('/'));
       }
     }
+    const incomplete = new Set(
+      this.projects
+        .filter((project) =>
+          this.issues.some((issue) => issue.startsWith(`projects/${project.slug}/`)),
+        )
+        .map((project) => project.id),
+    );
+    const invalid = invalidPromptRelations(this.prompts, incomplete);
+    for (const prompt of this.prompts)
+      if (invalid.has(`${prompt.projectId}:${prompt.id}`))
+        this.issues.push(
+          [...promptPath(this.project(prompt.projectId).slug, prompt.id), 'meta.json'].join('/'),
+        );
+    for (const dir of await this.fs.list(['scratchpad'])) {
+      if (dir.kind !== 'directory') continue;
+      const path = ['scratchpad', dir.name, 'meta.json'];
+      try {
+        const meta = await this.tracked(scratchpadSchema, path);
+        if (meta.id !== dir.name) throw new AppFault('INVALID_SCHEMA');
+        this.scratchpads.push(meta);
+      } catch {
+        this.issues.push(path.join('/'));
+      }
+    }
     return this.view();
+  }
+  async refreshPending(): Promise<WorkspaceView> {
+    // Inspect recovery records without accepting external changes as new write baselines.
+    this.pending = await this.journal.inspect();
+    return this.view();
+  }
+  async externalChanges(ref?: { projectId: string; id: string }): Promise<string[]> {
+    if (this.journal.blocked || this.pending.length) return [];
+    const changed: string[] = [];
+    const paths = [workspacePath, settingsPath];
+    if (ref) {
+      const project = this.project(ref.projectId);
+      paths.push(
+        ['projects', project.slug, 'project.json'],
+        [...promptPath(project.slug, ref.id), 'meta.json'],
+        [...promptPath(project.slug, ref.id), 'current.md'],
+      );
+    }
+    for (const path of paths) {
+      const key = path.join('/'),
+        text = this.originals.get(key);
+      if (text !== undefined && (await this.fs.read(path))?.hash !== (await sha256(text)))
+        changed.push(key);
+    }
+    return changed;
   }
   async recover(operationId: string, choice: 'finish' | 'rollback'): Promise<WorkspaceView> {
     if (!this.writable) throw new AppFault('BUSY');
@@ -304,16 +383,29 @@ export class WorkspaceRuntime {
   }
   async updateProject(
     id: string,
-    patch: { name?: string; status?: 'active' | 'archived'; deletedAt?: string | null },
+    patch: {
+      name?: string;
+      description?: string;
+      tags?: string[];
+      status?: 'active' | 'archived';
+      deletedAt?: string | null;
+    },
   ): Promise<WorkspaceView> {
     this.assertWritable();
     const current = this.project(id),
       operationId = newId('op');
     const allowed = {
       ...(patch.name === undefined ? {} : { name: patch.name }),
+      ...(patch.description === undefined ? {} : { description: patch.description }),
+      ...(patch.tags === undefined ? {} : { tags: patch.tags }),
       ...(patch.status === undefined ? {} : { status: patch.status }),
       ...(patch.deletedAt === undefined ? {} : { deletedAt: patch.deletedAt }),
     };
+    if (
+      (current.status === 'archived' || current.deletedAt) &&
+      (patch.name !== undefined || patch.description !== undefined || patch.tags !== undefined)
+    )
+      throw new AppFault('BUSY');
     const next = projectSchema.parse({
       ...current,
       ...allowed,
@@ -329,50 +421,100 @@ export class WorkspaceRuntime {
     this.projects = this.projects.map((p) => (p.id === id ? next : p));
     return this.view();
   }
-  async createPrompt(projectId: string, title: string): Promise<PromptMeta> {
+  async createPrompt(projectId: string, title = '未命名提示词'): Promise<PromptMeta> {
+    return this.newPrompt(projectId, title);
+  }
+  async createNext(projectId: string, parentPromptId: string): Promise<PromptMeta> {
+    this.editable(projectId, parentPromptId);
+    return this.newPrompt(projectId, '未命名提示词', parentPromptId);
+  }
+  private async newPrompt(
+    projectId: string,
+    title: string,
+    parentPromptId?: string,
+  ): Promise<PromptMeta> {
     this.editable(projectId);
     const project = this.project(projectId),
       operationId = newId('op');
     const id = nextPromptId(
       (await this.fs.list(['projects', project.slug, 'prompts'])).map((e) => e.name),
     );
-    const meta = promptSchema.parse({
-      ...baseDocument(operationId),
+    const active = ordered(this.prompts.filter((p) => p.projectId === projectId && !p.deletedAt));
+    const order = parentPromptId
+      ? this.meta(projectId, parentPromptId).order + 1
+      : active.length + 1;
+    const adjusted = parentPromptId
+      ? active
+          .filter((p) => p.order >= order)
+          .map((p) =>
+            promptSchema.parse({
+              ...p,
+              order: p.order + 1,
+              revision: p.revision + 1,
+              lastOperationId: operationId,
+              updatedAt: new Date().toISOString(),
+            }),
+          )
+      : [];
+    const meta = initialPrompt({
+      operationId,
+      eventId: newId('event'),
+      at: new Date().toISOString(),
       id,
       projectId,
       title,
-      status: 'draft',
       target: this.settings.defaultTarget,
-      order: this.prompts.filter((p) => p.projectId === projectId && !p.deletedAt).length + 1,
-      parentPromptId: null,
-      tags: [],
-      notes: '',
-      submittedAt: null,
-      completedAt: null,
-      submittedVersion: null,
-      currentVersion: 0,
-      versions: [],
-      deletedAt: null,
-      statusHistory: [
-        {
-          id: newId('event'),
-          operationId,
-          from: null,
-          to: 'draft',
-          at: new Date().toISOString(),
-          versionNumber: null,
-          kind: 'created',
-        },
-      ],
+      order,
+      parentPromptId: parentPromptId ?? null,
     });
     const root = promptPath(project.slug, id);
     await this.commit(
-      [this.change([...root, 'current.md'], ''), this.change([...root, 'meta.json'], json(meta))],
+      [
+        ...adjusted.map((p) =>
+          this.change([...promptPath(project.slug, p.id), 'meta.json'], json(p)),
+        ),
+        this.change([...root, 'current.md'], ''),
+        this.change([...root, 'meta.json'], json(meta)),
+      ],
       'prompt',
       operationId,
     );
     this.prompts.push(meta);
+    for (const item of adjusted) this.replaceMeta(item);
     return meta;
+  }
+  async reorder(projectId: string, ids: string[]): Promise<WorkspaceView> {
+    this.editable(projectId);
+    const active = this.prompts.filter((p) => p.projectId === projectId && !p.deletedAt);
+    if (
+      new Set(ids).size !== active.length ||
+      ids.length !== active.length ||
+      active.some((p) => !ids.includes(p.id))
+    )
+      throw new AppFault('INVALID_SCHEMA');
+    const operationId = newId('op'),
+      at = new Date().toISOString();
+    const adjusted = ids.map((id, i) =>
+      promptSchema.parse({
+        ...this.meta(projectId, id),
+        order: i + 1,
+        revision: this.meta(projectId, id).revision + 1,
+        lastOperationId: operationId,
+        updatedAt: at,
+      }),
+    );
+    await this.commit(
+      adjusted.map((meta) =>
+        this.change(
+          [...promptPath(this.project(projectId).slug, meta.id), 'meta.json'],
+          json(meta),
+        ),
+      ),
+      'reorder',
+      operationId,
+    );
+    for (const item of adjusted) this.replaceMeta(item);
+    return this.view();
   }
   async openPrompt(projectId: string, promptId: string): Promise<OpenPrompt> {
     if (this.pending.length || this.journal.blocked) throw new AppFault('RECOVERY_REQUIRED');
@@ -408,6 +550,52 @@ export class WorkspaceRuntime {
     );
     this.replaceMeta(next);
     return { meta: next, body, baseContentHash: await sha256(body) };
+  }
+  async transitionStoredPrompt(projectId: string, promptId: string, status: PromptStatus) {
+    this.assertWritable();
+    const meta = this.meta(projectId, promptId);
+    if (meta.deletedAt) throw new AppFault('BUSY');
+    const path = [...promptPath(this.project(projectId).slug, promptId), 'meta.json'];
+    // A list action must not silently accept metadata changed since the list was loaded.
+    const expected = this.originals.get(path.join('/'));
+    if (!expected || (await this.fs.read(path))?.hash !== (await sha256(expected)))
+      throw new AppFault('CONFLICT');
+    const document = await this.openPrompt(projectId, promptId);
+    return this.checkpoint(projectId, promptId, document.body, status);
+  }
+  async updateSettings(input: {
+    name: string;
+    defaultTarget: string;
+    autosaveEnabled: boolean;
+    autosaveDelayMs: number;
+  }): Promise<WorkspaceView> {
+    this.assertWritable();
+    const operationId = newId('op'),
+      updatedAt = new Date().toISOString();
+    const workspace = workspaceSchema.parse({
+      ...this.workspace,
+      name: input.name,
+      revision: this.workspace.revision + 1,
+      lastOperationId: operationId,
+      updatedAt,
+    });
+    const settings = settingsSchema.parse({
+      ...this.settings,
+      defaultTarget: input.defaultTarget,
+      autosaveEnabled: input.autosaveEnabled,
+      autosaveDelayMs: input.autosaveDelayMs,
+      revision: this.settings.revision + 1,
+      lastOperationId: operationId,
+      updatedAt,
+    });
+    await this.commit(
+      [this.change(settingsPath, json(settings)), this.change(workspacePath, json(workspace))],
+      'settings',
+      operationId,
+    );
+    this.workspace = workspace;
+    this.settings = settings;
+    return this.view();
   }
   private replaceMeta(meta: PromptMeta) {
     this.prompts = this.prompts.map((p) =>
@@ -653,5 +841,186 @@ export class WorkspaceRuntime {
   async close(): Promise<void> {
     await this.journal.drain();
     this.closed = true;
+  }
+  private scratch(id: string) {
+    const meta = this.scratchpads.find((s) => s.id === id);
+    if (!meta) throw new AppFault('NOT_FOUND');
+    return meta;
+  }
+  private replaceScratch(meta: ScratchMeta) {
+    this.scratchpads = this.scratchpads.map((s) => (s.id === meta.id ? meta : s));
+  }
+  async createScratch(): Promise<OpenScratch> {
+    this.assertWritable();
+    const operationId = newId('op');
+    const meta = scratchpadSchema.parse({
+      ...baseDocument(operationId),
+      id: newId('scratch'),
+      title: '临时草稿',
+      deletedAt: null,
+      transferredTo: null,
+      transferredAt: null,
+    });
+    await this.commit(
+      [
+        this.change(['scratchpad', meta.id, 'current.md'], ''),
+        this.change(['scratchpad', meta.id, 'meta.json'], json(meta)),
+      ],
+      'scratchpad',
+      operationId,
+    );
+    this.scratchpads.push(meta);
+    return { meta, body: '', baseContentHash: await sha256('') };
+  }
+  async openScratch(id: string): Promise<OpenScratch> {
+    if (this.journal.blocked || this.pending.length) throw new AppFault('RECOVERY_REQUIRED');
+    this.scratch(id);
+    const meta = await this.tracked(scratchpadSchema, ['scratchpad', id, 'meta.json']);
+    if (meta.id !== id) throw new AppFault('INVALID_SCHEMA');
+    const file = await this.fs.read(['scratchpad', id, 'current.md']);
+    if (!file) throw new AppFault('NOT_FOUND');
+    this.originals.set(`scratchpad/${id}/current.md`, file.text);
+    this.replaceScratch(meta);
+    return { meta, body: file.text, baseContentHash: file.hash };
+  }
+  async saveScratch(id: string, title: string, body: string): Promise<OpenScratch> {
+    this.assertWritable();
+    const current = this.scratch(id),
+      operationId = newId('op');
+    if (current.deletedAt || current.transferredTo) throw new AppFault('BUSY');
+    if (!this.originals.has(`scratchpad/${id}/current.md`)) throw new AppFault('CONFLICT');
+    const meta = scratchpadSchema.parse({
+      ...current,
+      title,
+      revision: current.revision + 1,
+      updatedAt: new Date().toISOString(),
+      lastOperationId: operationId,
+    });
+    await this.commit(
+      [
+        this.change(['scratchpad', id, 'current.md'], body),
+        this.change(['scratchpad', id, 'meta.json'], json(meta)),
+      ],
+      'scratchpad',
+      operationId,
+    );
+    this.replaceScratch(meta);
+    return { meta, body, baseContentHash: await sha256(body) };
+  }
+  async setScratchDeleted(id: string, deleted: boolean) {
+    this.assertWritable();
+    const current = this.scratch(id),
+      operationId = newId('op'),
+      at = new Date().toISOString();
+    const meta = scratchpadSchema.parse({
+      ...current,
+      deletedAt: deleted ? at : null,
+      revision: current.revision + 1,
+      updatedAt: at,
+      lastOperationId: operationId,
+    });
+    await this.commit(
+      [this.change(['scratchpad', id, 'meta.json'], json(meta))],
+      'delete',
+      operationId,
+    );
+    this.replaceScratch(meta);
+    return this.view();
+  }
+  async transferScratch(
+    id: string,
+    projectId: string,
+  ): Promise<{ projectId: string; promptId: string }> {
+    this.assertWritable();
+    const source = this.scratch(id);
+    if (source.transferredTo) {
+      const target = await this.openPrompt(
+        source.transferredTo.projectId,
+        source.transferredTo.promptId,
+      );
+      if (target.meta.projectId !== source.transferredTo.projectId)
+        throw new AppFault('INVALID_SCHEMA');
+      return source.transferredTo;
+    }
+    if (source.deletedAt) throw new AppFault('BUSY');
+    this.editable(projectId);
+    const body = await this.fs.read(['scratchpad', id, 'current.md']);
+    if (
+      !body ||
+      body.hash !== (await sha256(this.originals.get(`scratchpad/${id}/current.md`) ?? ''))
+    )
+      throw new AppFault('CONFLICT');
+    const project = this.project(projectId),
+      operationId = newId('op'),
+      at = new Date().toISOString();
+    const promptId = nextPromptId(
+      (await this.fs.list(['projects', project.slug, 'prompts'])).map((e) => e.name),
+    );
+    const meta = initialPrompt({
+      operationId,
+      eventId: newId('event'),
+      at,
+      projectId,
+      id: promptId,
+      title: source.title,
+      target: this.settings.defaultTarget,
+      order: this.prompts.filter((p) => p.projectId === projectId && !p.deletedAt).length + 1,
+      parentPromptId: null,
+    });
+    const transferredTo = { projectId, promptId };
+    const scratch = scratchpadSchema.parse({
+      ...source,
+      transferredTo,
+      transferredAt: at,
+      revision: source.revision + 1,
+      updatedAt: at,
+      lastOperationId: operationId,
+    });
+    await this.commit(
+      [
+        this.change(['scratchpad', id, 'current.md'], body.text),
+        this.change([...promptPath(project.slug, promptId), 'current.md'], body.text),
+        this.change([...promptPath(project.slug, promptId), 'meta.json'], json(meta)),
+        this.change(['scratchpad', id, 'meta.json'], json(scratch)),
+      ],
+      'scratchpad',
+      operationId,
+    );
+    this.prompts.push(meta);
+    this.replaceScratch(scratch);
+    return transferredTo;
+  }
+  async readSearchBody(projectId: string, promptId: string) {
+    const file = await this.fs.read([
+      ...promptPath(this.project(projectId).slug, promptId),
+      'current.md',
+    ]);
+    if (!file) throw new AppFault('NOT_FOUND');
+    return { body: file.text, hash: file.hash };
+  }
+  directoryName() {
+    return this.fs.name;
+  }
+  async files() {
+    return listWorkspaceFiles(this.fs);
+  }
+  async readLocalFile(path: string[]) {
+    if (!isBusinessPath(path)) throw new AppFault('PATH_INVALID');
+    const file = await this.fs.read(path);
+    if (!file) throw new AppFault('NOT_FOUND');
+    return file.text;
+  }
+  async snapshot(): Promise<WorkspaceSnapshot> {
+    this.assertWritable();
+    return captureSnapshot(this.fs);
+  }
+  async migrate(target: FileSystemPort, snapshot: WorkspaceSnapshot) {
+    this.assertWritable();
+    if (snapshot.workspaceId !== this.workspace.id) throw new AppFault('CONFLICT');
+    await copySnapshot(this.fs, target, snapshot);
+    const runtime = await WorkspaceRuntime.open(target);
+    const view = await runtime.load();
+    if (view.pending.length || view.issues.length) throw new AppFault('RECOVERY_REQUIRED');
+    return runtime;
   }
 }
