@@ -95,7 +95,7 @@ async function authResponse(request: Request, env: WorkerEnvironment): Promise<R
         data !== null &&
         'email' in data &&
         typeof data.email === 'string' &&
-        data.email.toLowerCase() === 'admin@promptdesk.local'
+        ['admin@promptdesk.local', 'admin@prompt.com'].includes(data.email.trim().toLowerCase())
       ) {
         return cloudJson({ error: 'RESERVED_ACCOUNT' }, 403);
       }

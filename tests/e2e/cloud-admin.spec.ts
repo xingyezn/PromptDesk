@@ -24,7 +24,7 @@ test('synthetic administrator changes initial password and manages a user', asyn
   let removed = false;
   try {
     await page.goto('/');
-    await page.getByLabel('邮箱', { exact: true }).fill('admin@promptdesk.local');
+    await page.getByLabel('邮箱', { exact: true }).fill('admin@prompt.com');
     await page.getByLabel('密码', { exact: true }).fill('Synthetic-local-admin-password-12');
     await page.getByRole('button', { name: '登录 PromptDesk', exact: true }).click();
     await expect(page.getByRole('heading', { name: '请先修改初始密码' })).toBeVisible();

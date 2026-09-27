@@ -52,7 +52,15 @@ test('personal space persists text, checkpoints, compact completion and mobile n
     await page.getByRole('button', { name: '提示词', exact: true }).click();
     await page.getByRole('button', { name: '新建', exact: true }).click();
     await body.fill('Synthetic mobile idea');
+    await expect(page.getByRole('button', { name: '保存草稿', exact: true })).toBeHidden();
+    const composerBounds = await body.boundingBox();
+    expect(composerBounds!.height).toBeGreaterThan(420);
+    const mobileNav = page.getByRole('navigation', { name: '个人空间导航' });
+    expect((await mobileNav.boundingBox())!.y).toBeGreaterThan(750);
+    await page.getByRole('button', { name: '提示词操作', exact: true }).click();
     await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await page.getByRole('button', { name: '提示词操作', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: '已保存到服务器' })).toBeVisible();
     await page.screenshot({ path: 'test-results/cloud-mobile-editor.png' });
     await page.getByRole('button', { name: '项目', exact: true }).click();
     await expect(page.getByRole('heading', { name: '我的项目' })).toBeVisible();

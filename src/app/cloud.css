@@ -36,6 +36,28 @@
   font-weight: 750;
   letter-spacing: -0.4px;
 }
+.cloud-environment {
+  color: #805100;
+  background: #fff0cc;
+  padding: 3px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+.account-environment {
+  padding: 12px;
+  border-left: 3px solid #ae7012;
+  background: #fff5df;
+  color: #684209;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.account-environment a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.cloud-app .cloud-editor-tools-toggle {
+  display: none;
+}
 .cloud-personal {
   display: inline-flex;
   gap: 6px;
@@ -470,8 +492,12 @@
 }
 @media (max-width: 700px) {
   .cloud-topbar {
-    padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+    padding: max(4px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 4px
+      max(12px, env(safe-area-inset-left));
     gap: 8px;
+    order: 0;
+    background: #fff;
+    min-height: 48px;
   }
   .cloud-topbar > button:first-child,
   .cloud-personal {
@@ -480,18 +506,30 @@
   .cloud-account-button span {
     font-size: 12px;
   }
+  .cloud-app .cloud-account-button {
+    min-height: 44px;
+    padding: 8px;
+    border: none;
+  }
   .cloud-mobile-nav {
     display: flex;
     gap: 4px;
-    padding: 4px 12px;
+    padding: 4px max(12px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
     background: #fff;
-    border-bottom: 1px solid var(--cloud-line);
+    border-top: 1px solid var(--cloud-line);
+    flex-shrink: 0;
+    order: 3;
   }
   .cloud-mobile-nav button {
     flex: 1;
     border: none;
     background: transparent;
-    min-height: 40px;
+    min-height: 48px;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    padding: 4px;
   }
   .cloud-mobile-nav button[aria-current='page'] {
     background: #e6eee5;
@@ -501,7 +539,9 @@
   .cloud-layout,
   .sidebar-collapsed .cloud-layout {
     display: flex;
-    padding-bottom: env(safe-area-inset-bottom);
+    order: 2;
+    overflow: hidden;
+    padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
   }
   .cloud-projects,
   .cloud-list,
@@ -519,29 +559,51 @@
     display: flex;
   }
   .cloud-editor-heading {
-    padding: 8px;
+    padding: 4px 8px;
     gap: 4px;
   }
   .cloud-editor-heading input {
     font-size: 16px;
   }
   .cloud-editor-heading button {
-    min-height: 40px;
+    min-height: 44px;
     padding: 8px;
+    white-space: nowrap;
+  }
+  .cloud-app .cloud-editor-tools-toggle {
+    display: inline-flex;
+    flex-shrink: 0;
+    width: 44px;
+  }
+  .cloud-editor-tools-toggle[aria-expanded='true'] {
+    background: #e6eee5;
+    color: #245b43;
   }
   .cloud-editor-meta {
+    display: none;
     padding: 0 8px 8px;
     gap: 6px;
   }
+  .cloud-editor-meta.is-open {
+    display: flex;
+    max-height: 35dvh;
+    overflow-y: auto;
+    border-bottom: 1px solid var(--cloud-line);
+  }
   .cloud-editor-meta button {
-    min-height: 36px;
+    min-height: 44px;
   }
   .cloud-editor-meta select {
     font-size: 16px;
   }
   .cloud-save-state {
-    padding: 0 8px 6px;
+    padding: 0 8px;
+    min-height: 32px;
     font-size: 11px;
+    flex-shrink: 0;
+  }
+  .cloud-save-state button {
+    min-height: 32px;
   }
   .cloud-composer .format-toolbar {
     flex-wrap: nowrap;
@@ -549,7 +611,7 @@
     padding: 4px 8px;
   }
   .cloud-composer .format-toolbar button {
-    min-height: 36px;
+    min-height: 44px;
     flex-shrink: 0;
   }
   .cloud-composer .format-toolbar label {
@@ -560,26 +622,73 @@
   .cloud-project-settings input {
     font-size: 16px;
   }
+  .cloud-list-tools button,
+  .cloud-section-heading button {
+    min-height: 44px;
+  }
+  .cloud-projects {
+    padding: 20px 16px;
+  }
+  .cloud-list {
+    padding: 16px 8px 8px;
+  }
+  .cloud-section-heading h1,
+  .cloud-section-heading h2 {
+    font-size: 20px;
+    letter-spacing: -0.4px;
+  }
   .cloud-projects li > button {
     min-height: 44px;
   }
   .cloud-prompt-row {
-    min-height: 56px;
+    min-height: 60px;
+    padding-block: 4px;
+  }
+  .cloud-app .cloud-prompt-open {
+    min-height: 44px;
+  }
+  .cloud-prompt-open span {
+    font-size: 15px;
+  }
+  .cloud-prompt-open small {
+    font-size: 12px;
   }
   .cloud-app .cloud-check {
-    width: 28px;
-    height: 28px;
-    min-height: 28px;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    border: none;
+    background: radial-gradient(circle, white 12px, #87978a 12px, #87978a 13px, transparent 13px);
+  }
+  .cloud-app .cloud-check[aria-checked='true'] {
+    background: radial-gradient(circle, #245b43 13px, transparent 13px);
   }
   .cloud-app .cloud-drag {
     min-width: 28px;
     min-height: 44px;
   }
   .cloud-editor-footer {
-    padding: 6px 8px;
+    padding: 4px 8px;
+    min-height: 48px;
+    flex-shrink: 0;
+  }
+  .cloud-editor-footer summary {
+    padding: 12px 4px;
+    cursor: pointer;
+  }
+  .cloud-editor-footer > button {
+    min-height: 44px;
+  }
+  .cloud-version-panel {
+    right: 8px;
+    width: min(420px, calc(100vw - 16px));
   }
   .cloud-message {
     padding: 8px;
+    order: 1;
+    flex-shrink: 0;
+    max-height: 25dvh;
+    overflow: auto;
   }
   .cloud-settings-content {
     padding: 12px;
@@ -590,6 +699,44 @@
   .cloud-user-list li {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .cloud-loading {
+    padding: 16px;
+    justify-content: flex-start;
+  }
+  .account-page {
+    padding: max(32px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+    align-items: start;
+    background: #f7f8f5;
+  }
+  .account-card {
+    padding: 24px 0;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+  }
+  .account-card h1 {
+    font-size: 28px;
+    letter-spacing: -0.6px;
+    margin-block: 24px 12px;
+  }
+  .account-form input {
+    font-size: 16px;
+    min-height: 48px;
+  }
+  .account-form button,
+  .account-links button,
+  .cloud-account-section button,
+  .cloud-account-section input,
+  .cloud-settings-content > button {
+    min-height: 44px;
+  }
+  .cloud-account-section input {
+    font-size: 16px;
+    width: 100%;
+  }
+  .cloud-settings-content .account-card {
+    padding: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {

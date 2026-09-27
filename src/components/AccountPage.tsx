@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, ShieldCheck } from 'lucide-react';
 import { authClient } from '../services/api/authClient';
+import { isPreviewDeployment, productionUrl } from '../services/api/deployment';
 
 type AccountMode = 'sign-in' | 'sign-up';
 
@@ -63,7 +64,7 @@ export function AccountPage({
       await run(
         () =>
           authClient.signIn.email({
-            email,
+            email: email.trim().toLowerCase(),
             password,
           }),
         '已登录。',
@@ -73,7 +74,7 @@ export function AccountPage({
         () =>
           authClient.signUp.email({
             name: name.trim(),
-            email,
+            email: email.trim().toLowerCase(),
             password,
           }),
         '账户已创建并登录。当前版本不发送验证邮件，请使用可访问的邮箱作为登录名。',
@@ -128,6 +129,11 @@ export function AccountPage({
           </span>
           <span>PromptDesk 账户</span>
         </div>
+        {isPreviewDeployment && (
+          <p className="account-environment" role="note">
+            测试环境 · 账户和数据与正式版独立。<a href={productionUrl}>打开正式版</a>
+          </p>
+        )}
         {isPending ? (
           <p role="status">正在检查登录状态…</p>
         ) : sessionUser ? (
@@ -208,7 +214,10 @@ export function AccountPage({
                 邮箱
                 <input
                   type="email"
-                  autoComplete="email"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   required

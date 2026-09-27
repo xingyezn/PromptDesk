@@ -91,7 +91,7 @@ describe('Cloud personal spaces', () => {
       (
         await call('/auth/sign-up/email/', '', 'POST', {
           name: 'Synthetic reserved account',
-          email: 'admin@promptdesk.local',
+          email: 'admin@prompt.com',
           password: 'synthetic-admin-password-12',
         })
       ).status,

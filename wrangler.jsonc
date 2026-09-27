@@ -15,26 +15,12 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "promptdesk-db",
-      "database_id": "42d30071-a575-4620-b890-cb43d9fc54ec",
+      "database_name": "promptdesk-local-db",
+      "database_id": "00000000-0000-4000-8000-000000000001",
       "migrations_dir": "worker/migrations",
     },
   ],
   "env": {
-    "preview": {
-      "name": "promptdesk-preview",
-      "vars": {
-        "APP_BASE_URL": "https://promptdesk-preview.openedutools.workers.dev",
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "promptdesk-preview-db",
-          "database_id": "42d30071-a575-4620-b890-cb43d9fc54ec",
-          "migrations_dir": "worker/migrations",
-        },
-      ],
-    },
     "production": {
       "name": "promptdesk-worker",
       "vars": {

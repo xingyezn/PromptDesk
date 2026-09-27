@@ -9,8 +9,12 @@ import {
   Check,
   Folder,
   Cloud,
+  List,
+  PenLine,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { authClient } from '../services/api/authClient';
+import { isPreviewDeployment } from '../services/api/deployment';
 import { cloudClient, cloudErrorMessage } from '../services/api/cloudClient';
 import { copyText } from '../services/clipboard/clipboard';
 import {
@@ -58,6 +62,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     [account, setAccount] = useState(false),
     [pane, setPane] = useState<'projects' | 'list' | 'editor'>('projects');
   const [collapsed, setCollapsed] = useState(false),
+    [editorToolsOpen, setEditorToolsOpen] = useState(false),
     [showCompleted, setCompleted] = useState(false),
     [showTrash, setTrash] = useState(false),
     [query, setQuery] = useState(''),
@@ -331,6 +336,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
           <Menu size={18} />
         </button>
         <span className="cloud-brand">PromptDesk</span>
+        {isPreviewDeployment && <span className="cloud-environment">测试版</span>}
         <span className="cloud-personal">
           <Cloud size={14} /> {name} 的个人空间
         </span>
@@ -356,7 +362,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
             })
           }
         >
-          项目
+          <Folder size={18} /> 项目
         </button>
         <button
           disabled={!project}
@@ -367,14 +373,14 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
             })
           }
         >
-          提示词
+          <List size={18} /> 提示词
         </button>
         <button
           disabled={!editor.draft}
           aria-current={pane === 'editor' ? 'page' : undefined}
           onClick={() => setPane('editor')}
         >
-          编辑
+          <PenLine size={18} /> 编辑
         </button>
       </nav>
       {message && (
@@ -596,8 +602,20 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
                 <button aria-pressed={preview} onClick={() => setPreview(!preview)}>
                   {preview ? '编辑' : '预览'}
                 </button>
+                <button
+                  className="cloud-editor-tools-toggle"
+                  aria-label="提示词操作"
+                  aria-expanded={editorToolsOpen}
+                  aria-controls="cloud-editor-tools"
+                  onClick={() => setEditorToolsOpen(!editorToolsOpen)}
+                >
+                  <SlidersHorizontal size={18} />
+                </button>
               </div>
-              <div className="cloud-editor-meta">
+              <div
+                id="cloud-editor-tools"
+                className={`cloud-editor-meta ${editorToolsOpen ? 'is-open' : ''}`}
+              >
                 <span className={`cloud-status-text status-${editor.draft.status}`}>
                   {cloudLabels[editor.draft.status]}
                 </span>

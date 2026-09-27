@@ -15,7 +15,7 @@ run(cli, [
   'test',
   '--local',
   '--command',
-  "DELETE FROM user WHERE email LIKE '%@example.test' OR email='admin@promptdesk.local'; DELETE FROM rateLimit;",
+  "DELETE FROM user WHERE email LIKE '%@example.test' OR email IN ('admin@promptdesk.local','admin@prompt.com'); DELETE FROM rateLimit;",
 ]);
 mkdirSync('work', { recursive: true });
 rmSync('work/test-admin.txt', { force: true });

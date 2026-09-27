@@ -9,10 +9,11 @@
 - D1 `batch` 原子提交：CAS 更新的 operation 随机 token 控制后续 INSERT/排序写入，CAS 未命中不会产生版本或改变顺序。恢复原子增加当前正文检查点和恢复版本，不修改旧版本。自动保存无版本；进入 ready/completed、手动保存产生版本。编号取 nextVersion，不取列表长度。DB trigger 禁止修改历史版本。
 - 每用户最多 50 项目/500 提示词/10 MiB 正文与历史总量；每提示词 200 版本；正文最多 100,000 字符。软删除仍占额度。触发器维护 storage quota，超额时事务回滚。每用户最多 300 次云端写请求/10 分钟；限流和存储失败后自动保存暂停，草稿保留，用户点击重试；不循环覆盖。
 - 用户列表每页 25，所有非管理查询按 ownerId 索引限定，项目/提示词有应用上限，不无界扫描。管理员 GET `/api/admin/users?offset=`；PATCH `.../:id` 允许 disabled/password；DELETE 同路径需 confirmation=删除用户，永久级联删除该用户空间。两者拒绝自管理及管理员目标。停用/重置撤销全部 session；重置后强制改密；管理员不可删除自身账户。普通用户账户删除级联删除其云端数据。
-- 默认管理员由 `scripts/bootstrap-admin.mjs production <仓库外私密文件>` 初始化，保留已有管理员，不覆盖。账号 admin@promptdesk.local，密码随机生成并在文件本地交付，首次登录必须通过正常 change-password 修改。保留邮箱验证/邮件发送关闭，不支持邮件找回。
-- 移动端 ≤700px 为项目/列表/编辑单栏导航，正文可调字体、格式工具栏横向滚动；列表圆形完成按钮、状态文案与颜色、拖拽/键盘排序，完成项分组收起；项目可以顶部改名/归档/删除/恢复。
+- 默认管理员由 `scripts/bootstrap-admin.mjs production <仓库外私密文件>` 初始化，保留已有管理员，不覆盖。账号 admin@prompt.com，密码随机生成并在文件本地交付，首次登录必须通过正常 change-password 修改。2026-09-27 用户明确指定重设已有管理员账号/密码，本次保留 userId 和个人空间、撤销旧会话，用户自选密码不再标记临时密码。密码不进入代码或文档。新旧保留邮箱均禁止公开注册。保留邮箱验证/邮件发送关闭，不支持邮件找回。
+- 当前只保留 Production 服务。2026-09-27 用户要求停止继续测试、直接使用单一生产站，Preview Worker 已删除，Preview D1 仅保留为备份、不绑定活动部署。历史 Production/Preview 账户与数据隔离，未自动合并。workers.dev 的 openedutools 是账户级子域，不表示调用其他项目；不更改该子域以免影响账户内其他应用。保留旧测试地址的前端辨识代码作为兼容提示，不代表提供测试站。登录邮箱去除首尾空白并转小写，密码保持原样。
+- 移动端 ≤700px 为项目/列表/编辑单栏底部导航，44px 主要触控目标、16px 表单输入、安全区；编辑顶部保留复制/预览，次要操作用“提示词操作”开关展开，常驻保存反馈不折叠。正文可调字体、格式工具栏横向滚动；列表圆形完成按钮、状态文案与颜色、拖拽/键盘排序，完成项分组收起；项目可以顶部改名/归档/删除/恢复。viewport 使用 interactive-widget=resizes-content，软键盘行为仍需手机真机检查。
 - PWA 仅缓存静态 shell；API/cache-control no-store，正文不进入 SW/IndexedDB/URL。联网登录读取和写入，断网不会声称已保存；页面关闭前未保存有提示，不承诺断网完整业务或强制关闭无损。
-- 本地 E2E 使用独立 test D1，启动只清理该库合成账户和 rateLimit。旧本地 E2E 保留为历史测试但当前 testMatch 只跑 cloud/live-auth。Preview/Production 使用各自 D1，migration 先 Preview 后 Production；Pages workflow 已移除，发布通过 Cloudflare CLI，不在 GitHub 放秘密。
+- 本地开发工具保留独立 test D1，启动只清理该库合成账户和 rateLimit，不是线上服务。当前只发布 production，必要的前向 migration 直接在 production 执行；wrangler 无 preview 部署环境，默认本地绑定也不指向归档的 Preview 库。Pages workflow 已移除，发布通过 Cloudflare CLI，不在 GitHub 放秘密。停止追加测试遵循用户本次指示，已有验证记录保留。
 
 容量参考：[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Workers 价格](https://developers.cloudflare.com/workers/platform/pricing/)。约100名文字用户可由现有架构承载，但免费日读写及单库容量是硬边界。高频持续编辑可能超过免费额度；未自动升级付费计划。数据库灾难恢复使用 D1 Time Travel/运维导出，上线后仍应定期演练，不把版本管理当数据库备份。
 

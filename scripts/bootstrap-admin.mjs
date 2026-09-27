@@ -7,9 +7,9 @@ import { tmpdir } from 'node:os';
 
 const environment = process.argv[2];
 const destination = process.argv[3];
-if (!['preview', 'production', 'test'].includes(environment) || !destination) {
+if (!['production', 'test'].includes(environment) || !destination) {
   console.error(
-    'Usage: node scripts/bootstrap-admin.mjs <preview|production|test> <private-credentials-file>',
+    'Usage: node scripts/bootstrap-admin.mjs <production|test> <private-credentials-file>',
   );
   process.exit(1);
 }
@@ -51,13 +51,13 @@ await mkdir(dirname(credentialPath), { recursive: true });
 // This file is outside the repository for production. No password is emitted to stdout or CLI arguments.
 await writeFile(
   credentialPath,
-  `PromptDesk ${environment} administrator\nLogin: admin@promptdesk.local\nInitial password: ${password}\nChange this password immediately after signing in.\n`,
+  `PromptDesk ${environment} administrator\nLogin: admin@prompt.com\nInitial password: ${password}\nChange this password immediately after signing in.\n`,
   { flag: 'wx', mode: 0o600 },
 );
 try {
   await writeFile(
     sqlPath,
-    `INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES(${quote(id)},'管理员','admin@promptdesk.local',0,${quote(now)},${quote(now)});
+    `INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES(${quote(id)},'管理员','admin@prompt.com',0,${quote(now)},${quote(now)});
 INSERT INTO account(id,accountId,providerId,userId,password,createdAt,updatedAt) VALUES(${quote(accountId)},${quote(id)},'credential',${quote(id)},${quote(hashed)},${quote(now)},${quote(now)});
 UPDATE user_access SET role='admin',mustChangePassword=1 WHERE userId=${quote(id)} AND EXISTS(SELECT 1 FROM account WHERE userId=${quote(id)} AND providerId='credential');`,
     { mode: 0o600 },
