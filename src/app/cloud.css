@@ -648,10 +648,12 @@
   }
   .cloud-composer .format-toolbar {
     flex-wrap: wrap;
+    align-content: flex-start;
     overflow: visible;
     width: 100%;
     min-width: 0;
     max-width: 100%;
+    max-height: none;
     flex: 0 0 auto;
     padding: 4px 8px;
     box-sizing: border-box;
