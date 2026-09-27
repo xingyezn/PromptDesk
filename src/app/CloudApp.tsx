@@ -62,6 +62,8 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     [account, setAccount] = useState(false),
     [pane, setPane] = useState<'projects' | 'list' | 'editor'>('projects');
   const [collapsed, setCollapsed] = useState(false),
+    [projectWidth, setProjectWidth] = useState(() => (window.innerWidth <= 1024 ? 152 : 184)),
+    [listWidth, setListWidth] = useState(() => (window.innerWidth <= 1024 ? 224 : 272)),
     [editorToolsOpen, setEditorToolsOpen] = useState(false),
     [showCompleted, setCompleted] = useState(false),
     [showTrash, setTrash] = useState(false),
@@ -75,13 +77,70 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     [description, setDescription] = useState('');
   const selectionEpoch = useRef(0),
     alive = useRef(true),
-    dragged = useRef<string | null>(null);
+    dragged = useRef<string | null>(null),
+    resizing = useRef<{ pane: 'projects' | 'list'; startX: number; startWidth: number } | null>(
+      null,
+    );
   const editor = useCloudEditor(
     (prompt) => setPrompts((items) => items.map((item) => (item.id === prompt.id ? prompt : item))),
     onUnsaved,
   );
   const project = projects.find((p) => p.id === projectId);
   const readonly = Boolean(project?.archived || project?.deletedAt || editor.draft?.deletedAt);
+  const projectWidthMax = Math.max(140, window.innerWidth - listWidth - 276);
+  const listWidthMax = Math.max(
+    180,
+    window.innerWidth - (collapsed ? 0 : projectWidth) - (collapsed ? 8 : 16) - 260,
+  );
+
+  function startResize(
+    paneToResize: 'projects' | 'list',
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
+    event.preventDefault();
+    resizing.current = {
+      pane: paneToResize,
+      startX: event.clientX,
+      startWidth: paneToResize === 'projects' ? projectWidth : listWidth,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveResize(event: React.PointerEvent<HTMLDivElement>) {
+    const active = resizing.current;
+    if (!active) return;
+    const delta = event.clientX - active.startX;
+    if (active.pane === 'projects')
+      setProjectWidth(Math.max(140, Math.min(projectWidthMax, active.startWidth + delta)));
+    else setListWidth(Math.max(180, Math.min(listWidthMax, active.startWidth + delta)));
+  }
+
+  function resizeByKeyboard(
+    paneToResize: 'projects' | 'list',
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const delta = (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 40 : 12);
+    if (paneToResize === 'projects')
+      setProjectWidth((width) => Math.max(140, Math.min(projectWidthMax, width + delta)));
+    else setListWidth((width) => Math.max(180, Math.min(listWidthMax, width + delta)));
+  }
+
+  useEffect(() => {
+    const resizeForViewport = () => {
+      const availablePanels = Math.max(320, window.innerWidth - 276);
+      let overflow = projectWidth + listWidth - availablePanels;
+      if (overflow <= 0) return;
+      const projectReduction = Math.min(overflow, projectWidth - 140);
+      const nextProjectWidth = projectWidth - projectReduction;
+      overflow -= projectReduction;
+      setProjectWidth(nextProjectWidth);
+      setListWidth(Math.max(180, listWidth - overflow));
+    };
+    window.addEventListener('resize', resizeForViewport);
+    return () => window.removeEventListener('resize', resizeForViewport);
+  }, [projectWidth, listWidth]);
 
   useEffect(() => {
     const saveShortcut = (event: KeyboardEvent) => {
@@ -342,7 +401,15 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     </li>
   );
   return (
-    <div className={`cloud-app ${collapsed ? 'sidebar-collapsed' : ''} pane-${pane}`}>
+    <div
+      className={`cloud-app ${collapsed ? 'sidebar-collapsed' : ''} pane-${pane}`}
+      style={
+        {
+          '--project-width': `${projectWidth}px`,
+          '--list-width': `${listWidth}px`,
+        } as React.CSSProperties
+      }
+    >
       <header className="cloud-topbar">
         <button
           aria-label="收起或展开项目栏"
@@ -406,7 +473,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
         </div>
       )}
       <div className="cloud-layout">
-        <aside className="cloud-projects" aria-label="项目导航">
+        <aside id="cloud-project-navigation" className="cloud-projects" aria-label="项目导航">
           <div className="cloud-section-heading">
             <h2>我的项目</h2>
             <button
@@ -479,7 +546,24 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
           </details>
           <p className="cloud-storage-note">数据保存到服务器。换台设备登录即可继续。</p>
         </aside>
-        <section className="cloud-list" aria-label="提示词列表">
+        <div
+          className="cloud-resize-handle cloud-project-resize"
+          role="separator"
+          aria-label="调整项目栏宽度"
+          aria-controls="cloud-project-navigation"
+          aria-orientation="vertical"
+          aria-valuemin={140}
+          aria-valuemax={projectWidthMax}
+          aria-valuenow={projectWidth}
+          aria-valuetext={`${projectWidth} 像素`}
+          tabIndex={0}
+          onPointerDown={(event) => startResize('projects', event)}
+          onPointerMove={moveResize}
+          onPointerUp={() => (resizing.current = null)}
+          onPointerCancel={() => (resizing.current = null)}
+          onKeyDown={(event) => resizeByKeyboard('projects', event)}
+        />
+        <section id="cloud-prompt-list" className="cloud-list" aria-label="提示词列表">
           <div className="cloud-section-heading">
             <h1>{project?.name ?? '个人空间'}</h1>
             {project && (
@@ -595,6 +679,23 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
           )}
           {!project && <p className="cloud-empty">从项目栏选择项目，或创建一个新项目。</p>}
         </section>
+        <div
+          className="cloud-resize-handle cloud-list-resize"
+          role="separator"
+          aria-label="调整提示词列表宽度"
+          aria-controls="cloud-prompt-list"
+          aria-orientation="vertical"
+          aria-valuemin={180}
+          aria-valuemax={listWidthMax}
+          aria-valuenow={listWidth}
+          aria-valuetext={`${listWidth} 像素`}
+          tabIndex={0}
+          onPointerDown={(event) => startResize('list', event)}
+          onPointerMove={moveResize}
+          onPointerUp={() => (resizing.current = null)}
+          onPointerCancel={() => (resizing.current = null)}
+          onKeyDown={(event) => resizeByKeyboard('list', event)}
+        />
         <main className="cloud-editor" aria-label="提示词编辑区">
           {editor.draft ? (
             <>

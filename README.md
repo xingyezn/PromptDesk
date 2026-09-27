@@ -8,6 +8,8 @@
 
 默认管理员登录名为 `admin@prompt.com`，密码由管理员私下保管，不写入仓库。只提供上面的正式版入口，Preview Worker 已关闭，原测试数据库保留为备份而不提供服务；`openedutools` 是 Cloudflare 账户级地址后缀。手机底部导航切换项目/提示词/编辑，顶部复制；点“提示词操作”可展开状态、优先级与保存操作。提示词停止输入 20 秒后自动保存；编辑区内按 Ctrl/Cmd+S 或点击顶部“保存”立即保存。窄屏下格式工具栏自动换行。
 
+桌面布局支持拖动项目栏与提示词列表之间的分隔条，分别调整两栏宽度，编辑区自动使用剩余空间；分隔条也可聚焦后用左右方向键调整，Shift 加方向键可较大幅调整。手机单栏导航不显示拖动分隔条。
+
 开发：`npm ci`；`node scripts/dev-cloud.mjs`（独立合成测试环境 8789，启动清理该 test 库合成账户）。正常开发使用 `npm run build:worker`、本地 migration、`npm run worker:dev`，在 .dev.vars 配置私密 BetterAuth secret。`npm run dev` 只有前端，不能单独运行登录业务。
 
 开发检查命令保留：`npm run typecheck`、`npm run lint`、`npm run format:check`、`npm run test`、`npm run test:worker`、`npm run test:e2e`、`npm run build:worker`。目前用户要求直接使用单一生产服务，不继续线上测试。部署仅使用 `wrangler d1 migrations apply DB --remote --env production`（有新增迁移时）和 `wrangler deploy --env production`。首次管理员初始化见 TECH_SPEC 当前章节。
