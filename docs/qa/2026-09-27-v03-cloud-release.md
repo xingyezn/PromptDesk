@@ -4,8 +4,8 @@
 
 ## 实际发布
 
-- Production：https://promptdesk-worker.openedutools.workers.dev/；版本 `d2e634ea-0740-48dd-b093-021d45c08fb7`。
-- Preview：https://promptdesk-preview.openedutools.workers.dev/；版本 `eda041f4-6ecf-45f9-84fb-2047f2253b91`。
+- Production：https://promptdesk-worker.openedutools.workers.dev/；版本 `4177a3fc-0706-429c-a8f1-b6ba16f91959`。
+- Preview：https://promptdesk-preview.openedutools.workers.dev/；版本 `f79fb02f-c8e1-49c0-9741-84c1c7c9cf84`。
 - 两个环境先后应用 0003_cloud_spaces，schema=3。前端/API 同源，各自 D1。
 - 默认管理员已创建，凭据仅交付仓库外私密文件。实际验证登录、admin 角色、强制改密、改密前项目 API 被拒绝，随后退出，保留用户首次改密流程。
 - 初始化 CLI 因 SQL 文件执行输出含上传进度误报失败；回读及私密密码登录证明全部写入成功。脚本已修正回执解析并增加独立验证，不重置已有管理员。
@@ -33,3 +33,5 @@
 现有架构适合小规模文字应用，但免费额度取决于真实访问与写入量。每用户 50 项目/500 提示词/10 MiB 文本和历史，200 版本/提示词，写 API 300 次/10 分钟；未购买或升级付费计划。
 
 服务器为权威，断网保留页面草稿但不承诺强制关闭无损。旧本地 UI E2E 留作历史，当前 testMatch 只运行云端/登录流程。旧本地目录未自动导入。
+
+补充：最终发布包含 Auth 路径末尾斜杠归一化保护，补丁 Worker/D1 测试及 Production dry-run 通过；前端资源与完整 HTTPS 验收版本一致。
