@@ -10,6 +10,7 @@ export default tseslint.config(
       'playwright-report/**',
       'test-results/**',
       'work/**',
+      '.wrangler/**',
     ],
   },
   js.configs.recommended,
@@ -22,5 +23,9 @@ export default tseslint.config(
       'react-hooks/exhaustive-deps': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
     },
+  },
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
   },
 );

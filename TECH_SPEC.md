@@ -1,4 +1,32 @@
+> **V0.3 当前产品约束（2026-09-27）**：用户明确要求关闭 GitHub Pages，取消本地工作空间。Cloudflare Workers 同源托管 React 前端/API，D1 是所有账户项目、提示词、历史版本的权威来源。登录后进入个人空间，API 根据会话 userId 隔离；管理员仅管理账户，不默认读取其他人的正文。旧章节仅是 V0.1/V0.2 历史规格，不再限制当前云端实现。既有本地文件保持原样，不自动导入。任务见 V0.3_TASKS.md。
+
+## V0.3 云端架构与接口（当前）
+
+- React/TypeScript/Vite 前端与 Worker API 同源，D1 为业务权威来源。主入口 CloudApp，不再调用目录授权或 IndexedDB 业务缓存。旧 App/Workspace 实现保留为历史代码，未进入当前发布入口。
+- `src/domain/cloud.ts`：Zod DTO、显式请求白名单；`src/services/api/cloudClient.ts`：唯一云端请求入口；`src/app/useCloudEditor.ts`：串行保存、防抖 2 秒、会话/实体隔离、旧保存完成不覆盖新输入；`worker/cloud.ts`：会话租户边界、SQL、配额和事务；`worker/auth.ts`：Better Auth；`worker/migrations`：前向 D1 迁移。
+- GET `/api/me` 返回角色/停用/强制改密。GET/POST `/api/projects`；PATCH `/api/projects/:id`（revision）；GET/POST `/api/projects/:id/prompts`；POST `/api/projects/:id/order`（revision、完整 ID 集合）。GET/PATCH `/api/prompts/:id`；GET `.../versions`；POST `.../split`（revision、字符选区）。所有 ID 所有权来自会话，客户端不能提交 ownerId。
+- 401 未登录，403 停用/未改初始密码/只读/Origin 不符，404 不存在或不可访问，409 revision 冲突，422 条数限制，429 写入限流，503 存储或服务不可用。未知 JSON 严格 Zod 校验；请求流最多 512,000 字节；Auth 最多 16 KiB。POST/PATCH 强制 Origin 与配置 origin 相同，不开放跨域/CORS。
+- D1 `batch` 原子提交：CAS 更新的 operation 随机 token 控制后续 INSERT/排序写入，CAS 未命中不会产生版本或改变顺序。恢复原子增加当前正文检查点和恢复版本，不修改旧版本。自动保存无版本；进入 ready/completed、手动保存产生版本。编号取 nextVersion，不取列表长度。DB trigger 禁止修改历史版本。
+- 每用户最多 50 项目/500 提示词/10 MiB 正文与历史总量；每提示词 200 版本；正文最多 100,000 字符。软删除仍占额度。触发器维护 storage quota，超额时事务回滚。每用户最多 300 次云端写请求/10 分钟；限流和存储失败后自动保存暂停，草稿保留，用户点击重试；不循环覆盖。
+- 用户列表每页 25，所有非管理查询按 ownerId 索引限定，项目/提示词有应用上限，不无界扫描。管理员 GET `/api/admin/users?offset=`；PATCH `.../:id` 允许 disabled/password；DELETE 同路径需 confirmation=删除用户，永久级联删除该用户空间。两者拒绝自管理及管理员目标。停用/重置撤销全部 session；重置后强制改密；管理员不可删除自身账户。普通用户账户删除级联删除其云端数据。
+- 默认管理员由 `scripts/bootstrap-admin.mjs production <仓库外私密文件>` 初始化，保留已有管理员，不覆盖。账号 admin@promptdesk.local，密码随机生成并在文件本地交付，首次登录必须通过正常 change-password 修改。保留邮箱验证/邮件发送关闭，不支持邮件找回。
+- 移动端 ≤700px 为项目/列表/编辑单栏导航，正文可调字体、格式工具栏横向滚动；列表圆形完成按钮、状态文案与颜色、拖拽/键盘排序，完成项分组收起；项目可以顶部改名/归档/删除/恢复。
+- PWA 仅缓存静态 shell；API/cache-control no-store，正文不进入 SW/IndexedDB/URL。联网登录读取和写入，断网不会声称已保存；页面关闭前未保存有提示，不承诺断网完整业务或强制关闭无损。
+- 本地 E2E 使用独立 test D1，启动只清理该库合成账户和 rateLimit。旧本地 E2E 保留为历史测试但当前 testMatch 只跑 cloud/live-auth。Preview/Production 使用各自 D1，migration 先 Preview 后 Production；Pages workflow 已移除，发布通过 Cloudflare CLI，不在 GitHub 放秘密。
+
+容量参考：[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Workers 价格](https://developers.cloudflare.com/workers/platform/pricing/)。约100名文字用户可由现有架构承载，但免费日读写及单库容量是硬边界。高频持续编辑可能超过免费额度；未自动升级付费计划。数据库灾难恢复使用 D1 Time Travel/运维导出，上线后仍应定期演练，不把版本管理当数据库备份。
+
 # PromptDesk V0.1 技术规格
+
+> **版本边界（2026-09-27）：**本文原有章节定义 V0.1 静态应用实现约束。V0.2 已搭建 Worker 同源静态资源/API 边界和 D1 schema 探针；账户、远端用户数据和模型调用仍未实现，也不能改变本地 Workspace 的权威性。远端数据不得伪装为 Workspace 文件或 IndexedDB 缓存。GitHub Pages 保持静态预览，Worker 部署使用独立 origin。
+
+## V0.2-02 追加：PWA 与手机速记边界（2026-09-27）
+
+- `/capture` 是独立的本机快速记录页面，Dexie 层使用 `promptdesk-mobile-notes` 数据库；不能依赖已授权 Workspace，也不写入 Workspace Scratchpad。
+- 快速记录显式保存，单条最多 10,000 字符，可导出 JSON；清除 Workspace 缓存不清理此独立数据库。浏览器清理站点数据仍可能删除它，页面应持续显示数据位置和风险。
+- GitHub Pages PWA `start_url` 固定到 `/PromptDesk/#/capture`，manifest `scope` 为 `/PromptDesk/`。生产 service worker 使用构建时静态文件清单，仅缓存同源版本化静态资源和应用 shell；导航请求网络优先、离线退回 shell，其他请求除清单内资源外一律不拦截。
+- service worker 的旧版静态 cache 按 `promptdesk-shell-` 前缀清理，不访问 CacheStorage 中其他应用的条目；页面提供显式清理入口，并说明离线 shell 清理不会删除本机速记。
+- iOS/Android 的安装界面、键盘和安全区仍需设备手测；自动化窄视口不视为 PWA 原生安装验收。
 
 ## 追加规格：整体计划及工作空间管理（2026-09-26）
 
@@ -314,9 +342,9 @@ V0.1 需要最小可恢复协议，而非声称全盘原子性：
 
 ## 6. 状态及版本操作
 
-所有状态按钮调用统一状态 use case；当前值仅 `draft | ready | completed`，允许人工任意跳转。待办 checkbox 直接切换 completed，并分组展示完成项。进入 ready/completed 前正文非空，检查点与状态经同一事务提交；失败时状态保持原值。状态副作用在 domain policy/service 中集中实现，复制与状态完全独立。
+所有状态按钮调用统一状态 use case；当前值仅 `draft | ready | completed`，允许人工任意跳转。待办 checkbox 直接切换 completed，并分组展示完成项。进入 ready/completed 前正文非空，检查点与状态经同一事务提交；失败时状态保持原值。状态副作用在 domain policy/service 中集中实现，复制与状态完全独立。纯函数 `planCheckpoint` 根据当前/目标状态、最新版本号/hash 和正文 hash 决定是否新建版本、版本编号、reason 及状态事件，不执行 IO；`planPromptInsertion` 对稳定排序后的活动提示词计算插入位置和必要的顺序变更。Runtime 依据计划组织 Journal 事务。
 
-显式保存版本冻结当前正文；正文与最新版本完全相同则复用，不制造重复。同状态但正文有变化时可创建新检查点，不追加重复状态事件。恢复不覆盖任何历史文件：先保存当前草稿检查点（若变化），再创建恢复检查点，写 current.md；状态保持原值，提示用户自行决定是否重开任务。规则详见 DATA_SCHEMA。
+显式保存版本冻结当前正文；正文与最新版本完全相同则复用，不制造重复。同状态但正文有变化时可创建新检查点，不追加重复状态事件。恢复不覆盖任何历史文件：先保存当前草稿检查点（若变化），再创建恢复检查点，写 current.md；状态保持原值，提示用户自行决定是否重开任务。编号超出安全整数时拒绝创建，不换算或重用版本号。规则详见 DATA_SCHEMA。
 
 Project/Prompt 删除前应用内确认，事务写 deletedAt，不搬动文件。恢复清除 deletedAt；Project 删除后其 Prompt 全部隐藏但不逐条改状态，恢复 Project 保留各 Prompt 原来的删除标记。归档 Project 对子 Prompt 只读；不级联改 Prompt.status。
 
@@ -336,7 +364,7 @@ SearchService：初始索引标题、项目名、标签；后台读当前正文�
 
 应用不调用业务网络接口；无 analytics、远程字体、远程错误上报、GitHub SDK、LLM SDK。react-markdown 不启用 raw HTML；预览禁用所有远程图片（含 Markdown、HTML、CSS、SVG 引用），链接只允许安全 http(s)，用户明确点击才新窗口打开，noreferrer/noopener；禁止 javascript/data 执行。V0.1 不提供本地附件自动解析。自身生成的代码/文本只显示，不执行。
 
-生产 index.html 的 meta CSP 建议 `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'`；CodeMirror 需要动态样式，允许 inline style；开发环境单独放行 Vite HMR。不能声称 meta CSP 等同服务器安全头，也不能阻止其他同源应用访问 IndexedDB。GitHub 项目 Pages 常共享 user.github.io origin，敏感使用建议单独受控域名；应用自身保证不跨项目缓存读取及不上传，不能声称浏览器缓存具备密码学隔离。
+生产 index.html 的 meta CSP 使用 `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'`；V0.2 Worker API 需要同源 connect，当前不会连接第三方域名；CodeMirror 需要动态样式，允许 inline style；开发环境单独放行 Vite HMR。不能声称 meta CSP 等同服务器安全头，也不能阻止其他同源应用访问 IndexedDB。GitHub 项目 Pages 常共享 user.github.io origin，敏感使用建议单独受控域名；应用自身保证不跨项目缓存读取及不上传，不能声称浏览器缓存具备密码学隔离。
 
 ## 9. 错误映射与交互
 
@@ -483,3 +511,23 @@ jobs:
 - 发布：本地子路径构建预览 + 真实 Pages 测试；Network 验证无业务上传和远程图片请求；只发布应用构建资源。
 
 验收规模使用合成数据：10 个 Project × 100 个 Prompt × 每个正文约 10KB；导航阶段不读全部正文，界面可响应，全文索引有进度与取消。记录测试电脑/浏览器和观察结果，不把未经测量的毫秒指标写为既成事实。
+
+## 14. V0.2 Worker/API 边界（V02-03）
+
+### 拓扑
+
+GitHub 仍保存源代码、运行 CI，并托管 `/PromptDesk/` 静态预览。Cloudflare Worker 使用独立 origin，`assets.directory` 指向 Vite 的 root-base `dist/`，同一 Worker origin 提供 SPA 与 `/api/*`；Worker 不是 GitHub Pages 的跨域 API 后端。会话 Cookie 只属于 Worker origin，Pages 预览不代理账户流量。Preview Worker：`https://promptdesk-preview.openedutools.workers.dev`；Production Worker：`https://promptdesk-worker.openedutools.workers.dev`。preview/production D1 已建并迁移。真实收件箱邮件测试返回 503 后，产品当前禁用邮箱验证与发送，不配置 Resend secret。
+
+`npm run build` 保持 Pages base；`npm run build:worker` 固定 base 为 `/`，并同步生成 PWA scope/start URL。Service Worker 依然只缓存产物清单中的静态资源，忽略 `/api` 和其子路径。API client 使用相对同源地址及 `credentials: same-origin`，不支持任意 URL 或跨域配置。CSP `connect-src 'self'` 仅允许同源通信；未来第三方 Provider 流量必须经 Worker 代理，不加外域 allowlist。
+
+### Worker 端口及公开契约
+
+`worker/index.ts` 是独立的 HTTP 边界，只接收 `WorkerEnvironment` 中的 Static Assets 和 D1 binding；React 不导入这些 binding。Workspace API client 通过 `src/services/api/client.ts` 获得经校验的 `ApiResult<T>`；认证界面通过 `src/services/api/authClient.ts` 调用 Better Auth 同源端点。没有 Worker 的 Pages 预览仍正常使用本地功能；认证不可用不阻断 Workspace。
+
+`GET /api/health` 查询 `service_meta.schema_version`，返回 `{ ok, apiVersion, schemaVersion }`，只用于版本/部署诊断。`/api/auth/*` 由 Better Auth 处理邮箱地址+密码注册/登录、注销、会话和账户删除；当前不要求验证邮箱、不自动发送邮件。`/api/auth/request-password-reset`、`/api/auth/send-verification-email` 和 `/api/auth/verify-email` 固定返回 404 `EMAIL_FEATURES_DISABLED`。认证请求体最多 16 KiB；Worker 隐藏 5xx 细节并增加 no-store、nosniff、no-referrer 响应头。Better Auth 只信任配置的单一同源 origin，使用 HttpOnly、SameSite=Lax Cookie（HTTPS 部署自动启用 Secure），D1 rateLimit storage 和数据库限流规则；客户端不读写 Cookie。日志关闭，不记录邮箱、请求正文、会话 token 或密钥。Workspace 正文永不进入认证调用。其他 `/api` 路径固定 404；健康探针不开放 CORS。
+
+### D1 与本地验证
+
+D1 与 Workspace schema 独立版本化。`0001_service_meta.sql` 与 `0002_auth.sql` 分别建立版本探针和 Better Auth 用户/会话/密码账户/验证/限流表；不会放 Project、Prompt、Version、移动速记或 Workspace 路径。迁移通过 Wrangler D1 migrations 管理，不做运行时 schema 自动升级/回滚。默认本地环境 D1 ID 保留零值占位符；preview/production 使用 wrangler.jsonc 中已配置的独立数据库 ID。
+
+本机：先 `npm run worker:migrations:local`，再 `npm run worker:dev`；Wrangler 使用仓库忽略的 `.wrangler/` 状态。`.dev.vars.example` 仅含合成的 Better Auth secret 示例，复制到 `.dev.vars` 后才能本机配置；示例密钥不可部署。`npm run test:worker` 在 Workers runtime + 隔离 D1 中执行注册→登录→退出→删除及 CSRF/请求体上限流程，并断言邮件专属路由被关闭；CI 运行相同合成测试。`npm run worker:check` 执行 root-base 构建与部署 dry-run。真实 Cloudflare production deploy 和 HTTPS 浏览器 Cookie 验收需单独记录，不把 dry-run 当成部署成功。

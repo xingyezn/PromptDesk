@@ -14,7 +14,12 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["vite/client", "node", "@types/wicg-file-system-access"]
+    "types": [
+      "vite/client",
+      "node",
+      "@types/wicg-file-system-access",
+      "@cloudflare/vitest-plugin/types"
+    ]
   },
   "include": ["src", "tests", "*.ts"]
 }

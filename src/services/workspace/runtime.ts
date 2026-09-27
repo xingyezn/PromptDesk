@@ -22,9 +22,10 @@ import {
   type WorkspaceSettings,
 } from '../../domain/schemas';
 import {
-  checkpointRequired,
   nextPromptId,
   ordered,
+  planCheckpoint,
+  planPromptInsertion,
   validateTransition,
 } from '../../domain/policies';
 import { AppFault, attempt } from '../../types/errors';
@@ -450,23 +451,28 @@ export class WorkspaceRuntime {
       (entry) => entry.name,
     );
     const id = nextPromptId(names);
-    const order = current.order + 1;
-    const shifted = ordered(
-      this.prompts.filter(
-        (item) => item.projectId === projectId && !item.deletedAt && item.order >= order,
-      ),
+    const active = ordered(
+      this.prompts.filter((item) => item.projectId === projectId && !item.deletedAt),
     );
-    const adjusted = shifted.map((item) =>
-      promptSchema.parse({
-        ...item,
-        order: item.order + 1,
-        revision: item.revision + 1,
-        lastOperationId: operationId,
-        updatedAt: at,
-      }),
+    const insertion = planPromptInsertion(active, promptId);
+    const orderChanges = new Map(
+      insertion.changes.map((change) => [change.promptId, change.order]),
     );
+    const adjusted = insertion.changes
+      .filter((change) => change.promptId !== promptId)
+      .map((change) => {
+        const item = this.meta(projectId, change.promptId);
+        return promptSchema.parse({
+          ...item,
+          order: change.order,
+          revision: item.revision + 1,
+          lastOperationId: operationId,
+          updatedAt: at,
+        });
+      });
     const original = promptSchema.parse({
       ...current,
+      order: orderChanges.get(promptId) ?? current.order,
       revision: current.revision + 1,
       lastOperationId: operationId,
       updatedAt: at,
@@ -479,7 +485,7 @@ export class WorkspaceRuntime {
       id,
       title: newTitle,
       target: current.target,
-      order,
+      order: insertion.order,
       parentPromptId: promptId,
     });
     const originalRoot = promptPath(project.slug, promptId);
@@ -516,31 +522,27 @@ export class WorkspaceRuntime {
       (await this.fs.list(['projects', project.slug, 'prompts'])).map((e) => e.name),
     );
     const active = ordered(this.prompts.filter((p) => p.projectId === projectId && !p.deletedAt));
-    const order = parentPromptId
-      ? this.meta(projectId, parentPromptId).order + 1
-      : active.length + 1;
-    const adjusted = parentPromptId
-      ? active
-          .filter((p) => p.order >= order)
-          .map((p) =>
-            promptSchema.parse({
-              ...p,
-              order: p.order + 1,
-              revision: p.revision + 1,
-              lastOperationId: operationId,
-              updatedAt: new Date().toISOString(),
-            }),
-          )
-      : [];
+    const insertion = planPromptInsertion(active, parentPromptId ?? null);
+    const at = new Date().toISOString();
+    const adjusted = insertion.changes.map((change) => {
+      const item = this.meta(projectId, change.promptId);
+      return promptSchema.parse({
+        ...item,
+        order: change.order,
+        revision: item.revision + 1,
+        lastOperationId: operationId,
+        updatedAt: at,
+      });
+    });
     const meta = initialPrompt({
       operationId,
       eventId: newId('event'),
-      at: new Date().toISOString(),
+      at,
       id,
       projectId,
       title,
       target: this.settings.defaultTarget,
-      order,
+      order: insertion.order,
       parentPromptId: parentPromptId ?? null,
     });
     const root = promptPath(project.slug, id);
@@ -712,34 +714,38 @@ export class WorkspaceRuntime {
     const versions = [...current.versions],
       changes: Change[] = [],
       at = new Date().toISOString();
-    let number = versions.at(-1)?.number ?? 0;
-    if (!nextStatus || checkpointRequired(nextStatus)) {
-      const contentHash = await sha256(body);
-      if (versions.at(-1)?.contentHash !== contentHash) {
-        number++;
-        const version: VersionMeta = {
-          number,
-          fileName: versionFile(number),
-          createdAt: at,
-          reason: nextStatus === 'ready' ? 'ready' : 'manual',
-          note: '',
-          contentHash,
-          restoredFrom: null,
-          operationId,
-        };
-        versions.push(version);
-        changes.push({ path: [...root, 'versions', version.fileName], before: null, after: body });
-      }
+    const latestVersion = versions.at(-1);
+    const plan = planCheckpoint({
+      currentStatus: current.status,
+      nextStatus: nextStatus ?? null,
+      latestVersionNumber: latestVersion?.number ?? null,
+      latestContentHash: latestVersion?.contentHash ?? null,
+      bodyHash,
+    });
+    const number = plan.versionNumber;
+    if (plan.createVersion) {
+      const version: VersionMeta = {
+        number,
+        fileName: versionFile(number),
+        createdAt: at,
+        reason: plan.versionReason,
+        note: '',
+        contentHash: bodyHash,
+        restoredFrom: null,
+        operationId,
+      };
+      versions.push(version);
+      changes.push({ path: [...root, 'versions', version.fileName], before: null, after: body });
     }
     const statusHistory = [...current.statusHistory];
-    if (nextStatus && nextStatus !== current.status)
+    if (plan.appendStatusEvent && nextStatus)
       statusHistory.push({
         id: newId('event'),
         operationId,
         from: current.status,
         to: nextStatus,
         at,
-        versionNumber: checkpointRequired(nextStatus) ? number : null,
+        versionNumber: plan.statusVersionNumber,
         kind: 'transition',
       });
     const next = promptSchema.parse({
@@ -1035,6 +1041,18 @@ export class WorkspaceRuntime {
     const promptId = nextPromptId(
       (await this.fs.list(['projects', project.slug, 'prompts'])).map((e) => e.name),
     );
+    const active = ordered(this.prompts.filter((p) => p.projectId === projectId && !p.deletedAt));
+    const insertion = planPromptInsertion(active, null);
+    const adjusted = insertion.changes.map((change) => {
+      const item = this.meta(projectId, change.promptId);
+      return promptSchema.parse({
+        ...item,
+        order: change.order,
+        revision: item.revision + 1,
+        lastOperationId: operationId,
+        updatedAt: at,
+      });
+    });
     const meta = initialPrompt({
       operationId,
       eventId: newId('event'),
@@ -1043,7 +1061,7 @@ export class WorkspaceRuntime {
       id: promptId,
       title: source.title,
       target: this.settings.defaultTarget,
-      order: this.prompts.filter((p) => p.projectId === projectId && !p.deletedAt).length + 1,
+      order: insertion.order,
       parentPromptId: null,
     });
     const transferredTo = { projectId, promptId };
@@ -1057,6 +1075,9 @@ export class WorkspaceRuntime {
     });
     await this.commit(
       [
+        ...adjusted.map((item) =>
+          this.change([...promptPath(project.slug, item.id), 'meta.json'], json(item)),
+        ),
         this.change(['scratchpad', id, 'current.md'], body.text),
         this.change([...promptPath(project.slug, promptId), 'current.md'], body.text),
         this.change([...promptPath(project.slug, promptId), 'meta.json'], json(meta)),
@@ -1066,6 +1087,7 @@ export class WorkspaceRuntime {
       operationId,
     );
     this.prompts.push(meta);
+    for (const item of adjusted) this.replaceMeta(item);
     this.replaceScratch(scratch);
     return transferredTo;
   }

@@ -4,6 +4,8 @@ import {
   checkpointRequired,
   nextPromptId,
   ordered,
+  planCheckpoint,
+  planPromptInsertion,
   tokenEstimate,
   validateTransition,
 } from '../../src/domain/policies';
@@ -125,6 +127,72 @@ describe('domain safety', () => {
     expect(() => validateTransition(item, 'draft', '')).not.toThrow();
     expect(() => validateTransition(item, 'ready', '正文')).not.toThrow();
     expect(() => validateTransition({ ...item, deletedAt: at }, 'draft', '正文')).toThrow();
+  });
+  it('plans stable prompt insertion and emits only necessary order updates', () => {
+    const prompts = [prompt('P003', 4), prompt('P001', 1), prompt('P002', 1)];
+    expect(planPromptInsertion(prompts, 'P001')).toEqual({
+      order: 2,
+      changes: [{ promptId: 'P002', order: 3 }],
+    });
+    expect(planPromptInsertion(prompts, null)).toEqual({
+      order: 4,
+      changes: [
+        { promptId: 'P002', order: 2 },
+        { promptId: 'P003', order: 3 },
+      ],
+    });
+    expect(() => planPromptInsertion(prompts, 'P404')).toThrow();
+  });
+  it('plans checkpoint numbering, deduplication and status events without IO', () => {
+    const latestVersionNumber = 3;
+    const common = {
+      currentStatus: 'draft' as const,
+      latestVersionNumber,
+      latestContentHash: 'same-hash',
+      bodyHash: 'new-hash',
+    };
+    expect(planCheckpoint({ ...common, nextStatus: null })).toEqual({
+      versionNumber: 4,
+      createVersion: true,
+      versionReason: 'manual',
+      statusVersionNumber: null,
+      appendStatusEvent: false,
+    });
+    expect(planCheckpoint({ ...common, nextStatus: 'draft' })).toEqual({
+      versionNumber: 3,
+      createVersion: false,
+      versionReason: 'manual',
+      statusVersionNumber: null,
+      appendStatusEvent: false,
+    });
+    expect(planCheckpoint({ ...common, nextStatus: 'ready' })).toEqual({
+      versionNumber: 4,
+      createVersion: true,
+      versionReason: 'ready',
+      statusVersionNumber: 4,
+      appendStatusEvent: true,
+    });
+    expect(
+      planCheckpoint({
+        ...common,
+        currentStatus: 'ready',
+        nextStatus: 'completed',
+        latestContentHash: 'new-hash',
+      }),
+    ).toEqual({
+      versionNumber: 3,
+      createVersion: false,
+      versionReason: 'manual',
+      statusVersionNumber: 3,
+      appendStatusEvent: true,
+    });
+    expect(() =>
+      planCheckpoint({
+        ...common,
+        latestVersionNumber: Number.MAX_SAFE_INTEGER,
+        nextStatus: null,
+      }),
+    ).toThrow();
   });
   it('hashes UTF-8 bytes deterministically', async () => {
     await expect(sha256('合成正文\nabc')).resolves.toBe(

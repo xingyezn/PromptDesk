@@ -4,6 +4,8 @@ coverage/
 playwright-report/
 test-results/
 work/
+.wrangler/
+.dev.vars
 workspaces/
 .promptdesk/
 .env.local

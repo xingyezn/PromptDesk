@@ -1,0 +1,68 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "promptdesk-worker",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-27",
+  "vars": {
+    "APP_BASE_URL": "http://127.0.0.1:8787",
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "promptdesk-db",
+      "database_id": "42d30071-a575-4620-b890-cb43d9fc54ec",
+      "migrations_dir": "worker/migrations",
+    },
+  ],
+  "env": {
+    "preview": {
+      "name": "promptdesk-preview",
+      "vars": {
+        "APP_BASE_URL": "https://promptdesk-preview.openedutools.workers.dev",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "promptdesk-preview-db",
+          "database_id": "42d30071-a575-4620-b890-cb43d9fc54ec",
+          "migrations_dir": "worker/migrations",
+        },
+      ],
+    },
+    "production": {
+      "name": "promptdesk-worker",
+      "vars": {
+        "APP_BASE_URL": "https://promptdesk-worker.openedutools.workers.dev",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "promptdesk-production-db",
+          "database_id": "c9900ea2-8601-4968-bbdd-9a9de3f5baf4",
+          "migrations_dir": "worker/migrations",
+        },
+      ],
+    },
+    "test": {
+      "name": "promptdesk-test",
+      "vars": {
+        "APP_BASE_URL": "http://127.0.0.1:8789",
+        "BETTER_AUTH_SECRET": "synthetic-local-e2e-secret-with-at-least-32-characters",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "promptdesk-test-db",
+          "database_id": "00000000-0000-4000-8000-000000000000",
+          "migrations_dir": "worker/migrations",
+        },
+      ],
+    },
+  },
+}

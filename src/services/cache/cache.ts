@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie';
-import { newId } from '../../domain/schemas';
+import { newId, quickNoteRecordSchema } from '../../domain/schemas';
+import type { z } from 'zod';
 import { AppFault, attempt } from '../../types/errors';
 import { NativeFileSystem } from '../filesystem/native';
 
@@ -33,6 +34,7 @@ export interface SearchCacheEntry {
   contentHash: string;
   revision: number;
 }
+export type QuickNoteRecord = z.infer<typeof quickNoteRecordSchema>;
 class CacheDatabase extends Dexie {
   recentWorkspaces!: Table<Recent, string>;
   uiPreferences!: Table<UIPreference, [string, string]>;
@@ -49,8 +51,16 @@ class CacheDatabase extends Dexie {
     });
   }
 }
+class QuickNoteDatabase extends Dexie {
+  notes!: Table<QuickNoteRecord, string>;
+  constructor() {
+    super('promptdesk-mobile-notes');
+    this.version(1).stores({ notes: 'id, updatedAt' });
+  }
+}
 export class CacheService {
   private readonly db = new CacheDatabase();
+  private readonly quickNoteDb = new QuickNoteDatabase();
   available = true;
   async safe<T>(action: () => Promise<T>) {
     const result = await attempt(action);
@@ -129,5 +139,31 @@ export class CacheService {
   }
   putPreference(workspaceId: string, key: string, value: string) {
     return this.safe(() => this.db.uiPreferences.put({ workspaceId, key, value }));
+  }
+  listQuickNotes() {
+    return attempt(async () => {
+      const rows: unknown[] = await this.quickNoteDb.notes.orderBy('updatedAt').reverse().toArray();
+      return rows.map((row) => quickNoteRecordSchema.parse(row));
+    });
+  }
+  async saveQuickNote(id: string | null, body: string) {
+    if (body.trim().length === 0 || body.length > 10_000)
+      return { ok: false as const, error: new AppFault('INVALID_SCHEMA') };
+    const now = new Date().toISOString();
+    return attempt(async () => {
+      const stored = id ? await this.quickNoteDb.notes.get(id) : undefined;
+      const existing = stored ? quickNoteRecordSchema.parse(stored) : null;
+      const note = quickNoteRecordSchema.parse({
+        id: existing?.id ?? newId('note'),
+        body,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+      await this.quickNoteDb.notes.put(note);
+      return note;
+    });
+  }
+  deleteQuickNote(id: string) {
+    return attempt(() => this.quickNoteDb.notes.delete(id));
   }
 }

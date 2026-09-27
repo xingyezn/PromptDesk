@@ -1,0 +1,28 @@
+{
+  "id": "/",
+  "name": "PromptDesk · 提示词工作台",
+  "short_name": "PromptDesk",
+  "description": "随时记录想法，在个人空间管理提示词与历史版本。",
+  "start_url": "/#/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "theme_color": "#295b43",
+  "background_color": "#fbfcfa",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/promptdesk-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/promptdesk-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

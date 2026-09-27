@@ -10,7 +10,7 @@ export const formatLabels = {
 } as const;
 export type FormatKind = keyof typeof formatLabels;
 export function formatSelection(kind: FormatKind, selected: string): string {
-  const lines = (selected || '内容').split('\n');
+  const lines = (kind === 'numbered' ? selected : selected || '内容').split('\n');
   switch (kind) {
     case 'heading':
       return lines.map((line) => `## ${line.replace(/^#{1,6}\s+/, '')}`).join('\n');

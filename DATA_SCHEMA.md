@@ -1,3 +1,16 @@
+> **V0.3 当前产品约束（2026-09-27）**：用户明确要求关闭 GitHub Pages，取消本地工作空间。Cloudflare Workers 同源托管 React 前端/API，D1 是所有账户项目、提示词、历史版本的权威来源。登录后进入个人空间，API 根据会话 userId 隔离；管理员仅管理账户，不默认读取其他人的正文。旧章节仅是 V0.1/V0.2 历史规格，不再限制当前云端实现。既有本地文件保持原样，不自动导入。任务见 V0.3_TASKS.md。
+
+## V0.3 云端数据库（当前 schema=3）
+
+- `user_access(userId PK/FK user, role user|admin, disabled 0|1, mustChangePassword 0|1)`；新用户 trigger 默认 user，客户端不可写角色。
+- `cloud_project(id UUID PK, ownerId FK user, name, description, revision≥1, operation, archived 0|1, deletedAt, createdAt, updatedAt)`，UNIQUE(id,ownerId)，owner 索引。
+- `cloud_prompt(id UUID PK, projectId, ownerId, title, body, status draft|ready|completed, priority low|normal|high, sortOrder, revision≥1, nextVersion≥1, operation, deletedAt, createdAt, updatedAt)`；复合 FK(projectId,ownerId) 防止错误归属，owner/project/order 索引。默认未命名提示词，无创建标题表单。
+- `cloud_version(id UUID PK, promptId, ownerId, number, body, createdAt)`，UNIQUE(promptId,number)，复合 FK(promptId,ownerId)，UPDATE trigger 拒绝变更；仅账户永久删除会级联清理版本。
+- `cloud_usage(userId FK, bytes)`，CHECK 0≤bytes≤10MiB，正文/版本增删改 trigger 更新真实 UTF-8 字节数；软删除不释放额度。
+- DB 日期字段 cloud 表用 UTC ISO 字符串，BetterAuth auth 表接受适配器写入的 ISO 日期文本及历史毫秒整数；role/布尔字段整数，API 不泄漏 ownerId/operation/hash/password。DAO 返回数据以 src/domain/cloud.ts 校验。
+- Prompt 逻辑删除可恢复；完成与删除独立。已完成自动进入已完成分组，但不自动设 archived/禁止修改；项目归档只读，取消归档后编辑。排序和优先级独立，手动拖拽调整 sortOrder。
+- 本地 Workspace schema=2 不再是当前数据源；与 D1 schema=3 无自动映射。用户磁盘/旧缓存不读取不上传；旧账户迁移仅新增默认权限与空个人空间，不改密码、不改邮箱状态。
+
 # PromptDesk V0.1 数据规范
 
 ## 追加约定：备份、迁移及快速新建（2026-09-26）
@@ -378,6 +391,8 @@ manifest 及每个副本写入并校验完成前不能更改业务文件。phase
 
 数据库名 `promptdesk-cache`，初始 dbVersion=1。浏览器按 origin 隔离，不按 URL 子路径隔离；表名和 namespace 固定为 PromptDesk 自己使用，不枚举/清理其他应用数据。原生 Handle 不进入业务 JSON。
 
+V0.2 手机快速记录使用独立数据库 `promptdesk-mobile-notes`（dbVersion=1），与 Workspace 元数据、自动保存恢复副本和缓存清理事务隔离。Store `notes` 主键为 `id`、索引 `updatedAt`；记录字段为 `{id, body, createdAt, updatedAt}`，`body` 最多 10,000 字符。它是当前浏览器的临时本机数据，不进入 Workspace ZIP/迁移、搜索索引或账户数据；用户可显式导出 JSON。清理 Workspace 缓存不删除手机速记；浏览器清理站点数据仍可能将其删除。
+
 | Store            | 主键                                | 内容与失效条件                                                                   |
 | ---------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
 | recentWorkspaces | recentKey（随机 UUID）              | workspaceId/name、directoryHandle、lastOpenedAt；句柄失效可重选，不删除磁盘      |
@@ -414,3 +429,19 @@ workspace manifest 缺失：不是有效 Workspace，返回 Launcher，可选择
 Project/meta 单文件损坏：隔离该条目，可读取 current.md 的只读查看入口；不能因此初始化空对象覆盖或让正常条目全部不可用。Project 缺 prompts 目录时，若没有 pending/不完整创建证据可以显示空项目，首次创建 Prompt 再建目录；Prompt 缺 current.md 不猜为空，进入损坏状态。历史 hash 错误不得更新为新 hash 来掩盖损坏。
 
 复制整个 Workspace 到另一目录/电脑，清空浏览器缓存后打开，应恢复 Project、Prompt 当前文本、所有快照及说明、状态历史、排序、关联、删除标记、Scratchpad 和 Workspace 设置。浏览器主题及未保存恢复副本不属于此承诺。人工编辑 current.md 后重新打开必须看到真实文件；历史版本由外部编辑破坏后必须告警，不能静默接受。
+
+## 12. Worker D1 schema（独立于 Workspace）
+
+Worker 数据库有自己的 SQL migration 序列，与 Workspace JSON `schemaVersion`、IndexedDB Dexie `db.version()` 完全分开。V0.2 由 `worker/migrations/0001_service_meta.sql` 建立 schema 探针，再由 `0002_auth.sql` 增加 Better Auth 认证表：
+
+| 表             | 字段                                                                                     | 约束与用途                                                    |
+| -------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `service_meta` | `key TEXT PRIMARY KEY NOT NULL`                                                          | Worker schema 元数据键；当前仅 `schema_version`               |
+| `service_meta` | `value TEXT NOT NULL`                                                                    | 版本文本；当前为 `'2'`                                        |
+| `user`         | `id`, `name`, `email`, `emailVerified`, `image`, `createdAt`, `updatedAt`                | Better Auth 用户；邮箱唯一；仅账户身份信息，不含 Workspace    |
+| `session`      | `id`, `expiresAt`, `token`, `createdAt`, `updatedAt`, `ipAddress`, `userAgent`, `userId` | HttpOnly Cookie 对应的会话；`userId` 外键级联删除；token 唯一 |
+| `account`      | `id`, `accountId`, `providerId`, `userId`, token 字段、`password`、时间字段              | Better Auth 邮箱密码凭据；归属 `userId`，用户删除时级联       |
+| `verification` | `id`, `identifier`, `value`, `expiresAt`, `createdAt`, `updatedAt`                       | Better Auth 兼容表；当前禁用邮箱验证/重置接口，不应产生新令牌 |
+| `rateLimit`    | `id`, `key`, `count`, `lastRequest`                                                      | Better Auth 数据库存储的认证接口限流状态；key 唯一            |
+
+Worker D1 只储存账户身份、密码哈希/认证凭据、会话和限流状态；不储存 API key、Prompt、Workspace 名称/路径、速记或编辑器正文。密码只由 Better Auth 处理并以其密码哈希格式写入 `account.password`。当前没有邮件发送器：注册无需邮箱验证，验证与密码重置路由被 Worker 拒绝。账户删除通过 Better Auth 删除用户，并由外键级联删除账户凭据和会话；verification/rateLimit 不由用户外键归属，当前不创建邮箱 token，限流记录按 Better Auth 策略保留。Workspace schema 不借用 Worker 用户 ID，也不因登录建立关联。Wrangler migration 是唯一演进路径，不做在线自动迁移或降级。

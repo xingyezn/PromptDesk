@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -10,11 +9,15 @@ export function MarkdownEditor({
   body,
   readonly,
   onChange,
+  fontSize = 15,
+  onFontSizeChange,
   onSplitSelection,
 }: {
   body: string;
   readonly: boolean;
   onChange: (body: string) => void;
+  fontSize?: number;
+  onFontSizeChange?: (fontSize: number) => void;
   onSplitSelection?: (selected: string, from: number, to: number) => void;
 }) {
   const [hasSelection, setHasSelection] = useState(false);
@@ -50,13 +53,13 @@ export function MarkdownEditor({
             }
           }),
           EditorView.theme({
-            '&': { height: '100%', fontSize: '15px' },
+            '&': { height: '100%', fontSize: 'inherit' },
             '.cm-scroller': {
               overflow: 'auto',
               fontFamily: 'ui-monospace, Consolas, monospace',
               lineHeight: '1.8',
             },
-            '.cm-content': { padding: '28px 16px' },
+            '.cm-content': { padding: '12px 10px' },
             '.cm-gutters': { backgroundColor: '#fafbf9', border: 'none', color: '#a5aca5' },
             '&.cm-focused': { outline: 'none' },
             '.cm-line': { padding: '0 8px' },
@@ -126,8 +129,31 @@ export function MarkdownEditor({
           </button>
         )}
         <small>选择多行可转列表；制表符分隔文本可转表格</small>
+        {onFontSizeChange && (
+          <div className="editor-font-size" aria-label="编辑区文字大小">
+            <button
+              type="button"
+              aria-label="缩小编辑区文字"
+              disabled={readonly || fontSize <= 12}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onFontSizeChange(Math.max(12, fontSize - 1))}
+            >
+              A−
+            </button>
+            <span aria-live="polite">{fontSize}px</span>
+            <button
+              type="button"
+              aria-label="放大编辑区文字"
+              disabled={readonly || fontSize >= 24}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onFontSizeChange(Math.min(24, fontSize + 1))}
+            >
+              A+
+            </button>
+          </div>
+        )}
       </div>
-      <div className="markdown-editor" ref={host} />
+      <div className="markdown-editor" ref={host} style={{ fontSize: `${fontSize}px` }} />
     </div>
   );
 }

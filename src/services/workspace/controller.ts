@@ -137,6 +137,15 @@ export class WorkspaceController {
     this.recents = null;
     return this.cache.clearAll();
   }
+  listQuickNotes() {
+    return this.cache.listQuickNotes();
+  }
+  saveQuickNote(id: string | null, body: string) {
+    return this.cache.saveQuickNote(id, body);
+  }
+  deleteQuickNote(id: string) {
+    return this.cache.deleteQuickNote(id);
+  }
   reauthorize() {
     const permission = this.filesystem?.authorize();
     return attempt(async () => {

@@ -1,6 +1,6 @@
 {
   "name": "promptdesk",
-  "version": "0.1.0-dev.5",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,17 +13,24 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:production": "node scripts/test-production.mjs",
+    "test:e2e:production": "playwright test",
     "build": "npm run typecheck && vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "build:worker": "node scripts/build-worker.mjs",
+    "worker:dev": "wrangler dev --ip 127.0.0.1 --port 8787 --local",
+    "worker:migrations:local": "wrangler d1 migrations apply promptdesk-db --local",
+    "worker:check": "npm run build:worker && wrangler deploy --dry-run --env= && wrangler deploy --dry-run --env=preview && wrangler deploy --dry-run --env=production",
+    "preview": "vite preview --host 127.0.0.1",
+    "admin:bootstrap": "node scripts/bootstrap-admin.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",
     "@codemirror/lang-markdown": "6.5.2",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.13",
+    "better-auth": "1.7.6",
     "dexie": "4.4.6",
     "fflate": "0.8.3",
     "lucide-react": "1.48.0",
@@ -36,7 +43,10 @@
     "zustand": "5.0.15"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.2.8",
+    "@cloudflare/workers-types": "5.20260927.1",
     "@eslint/js": "10.0.1",
+    "@msw/cloudflare": "0.1.0",
     "@playwright/test": "1.63.0",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
@@ -50,10 +60,12 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "fake-indexeddb": "6.2.5",
     "jsdom": "29.1.1",
+    "msw": "2.15.0",
     "prettier": "3.9.9",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.1",
     "vite": "8.3.1",
-    "vitest": "5.0.2"
+    "vitest": "4.1.11",
+    "wrangler": "4.141.0"
   }
 }

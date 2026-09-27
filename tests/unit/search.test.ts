@@ -52,5 +52,6 @@ describe('local search and formatting rules', () => {
     );
     expect(formatSelection('code', '```\nx\n```')).toBe('````\n```\nx\n```\n````');
     expect(formatSelection('numbered', '- first\n- second')).toBe('1. first\n2. second');
+    expect(formatSelection('numbered', '')).toBe('1. ');
   });
 });

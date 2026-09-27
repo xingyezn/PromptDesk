@@ -19,7 +19,8 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm run test
+      - run: npm run test:worker
       - run: npm run build
+      - run: npm run worker:check
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - run: npm run test:e2e:production

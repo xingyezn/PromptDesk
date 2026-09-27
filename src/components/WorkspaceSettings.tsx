@@ -285,7 +285,7 @@ export function WorkspaceSettings({
           }}
         >
           <p>
-            将清除最近目录、搜索缓存和未落盘草稿恢复副本。已保存的本地文件不受影响，之后可重新选择目录打开。
+            将清除最近目录、搜索缓存和未落盘草稿恢复副本。已保存的本地文件不受影响，之后可重新选择目录打开。手机速记保存在独立位置，不受此操作影响。
           </p>
           <footer>
             <button disabled={busy} onClick={() => setConfirmClearCache(false)}>

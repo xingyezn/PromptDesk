@@ -16,12 +16,15 @@ import {
   Settings,
   ShieldCheck,
   Trash2,
+  UserRound,
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { WorkspaceSettings } from '../components/WorkspaceSettings';
 import { MetadataForm, type MetadataInput } from '../components/MetadataForm';
 import { PromptQueue } from '../components/PromptQueue';
 import { ScratchpadWorkspace } from '../components/ScratchpadWorkspace';
+import { QuickCapturePage } from '../components/QuickCapturePage';
+import { AccountPage } from '../components/AccountPage';
 import {
   statusLabels,
   statusSchema,
@@ -90,9 +93,11 @@ export function App() {
   const [showVersions, setShowVersions] = useState(false);
   const [historyBody, setHistoryBody] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [listView, setListView] = useState(false);
+  const [listView, setListView] = useState(true);
   const [showCompleted, setShowCompleted] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [editorFontSize, setEditorFontSize] = useState(15);
   const [migrationPreview, setMigrationPreview] = useState<MigrationPreview | null>(null);
   const [migrationRecovery, setMigrationRecovery] = useState<MigrationRecovery | null>(null);
   const [migrationChoices, setMigrationChoices] = useState<ArchivedPromptChoices>({});
@@ -102,6 +107,11 @@ export function App() {
   );
   const navigate = useNavigate(),
     location = useLocation();
+  useEffect(() => {
+    if (location.pathname !== '/') return;
+    const token = new URLSearchParams(window.location.search).get('token');
+    if (token) navigate('/account?reset=1', { replace: true });
+  }, [location.pathname, navigate]);
   const updateView = useCallback(() => setView(api.view()), []);
   const { editor, flush: flushPrompt } = usePromptEditor(view, updateView);
   const scratchFlush = useRef<(() => Promise<boolean>) | null>(null);
@@ -141,6 +151,23 @@ export function App() {
         setSidebarCollapsed(result.value === 'true');
     });
   }, [view?.sessionId]);
+  useEffect(() => {
+    const sessionId = view?.sessionId;
+    if (!sessionId) return;
+    void api.getUIPreference('editorFontSize').then((result) => {
+      if (api.view()?.sessionId !== sessionId || !result.ok || result.value === null) return;
+      const storedSize = Number(result.value);
+      if (Number.isInteger(storedSize) && storedSize >= 12 && storedSize <= 24)
+        setEditorFontSize(storedSize);
+    });
+  }, [view?.sessionId]);
+  const changeEditorFontSize = (nextSize: number) => {
+    const safeSize = Math.max(12, Math.min(24, nextSize));
+    setEditorFontSize(safeSize);
+    void api.setUIPreference('editorFontSize', String(safeSize)).then((result) => {
+      if (!result.ok) setMessage('字号已临时调整；浏览器缓存不可用，关闭后不会保留。');
+    });
+  };
   const activeSessionId = view?.sessionId;
   useEffect(() => {
     if (!activeSessionId) return;
@@ -721,6 +748,11 @@ export function App() {
     </Modal>
   );
 
+  if (location.pathname === '/capture')
+    return <QuickCapturePage hasWorkspace={!!view} onHome={() => void go('/')} />;
+
+  if (location.pathname === '/account') return <AccountPage onBack={() => void go('/')} />;
+
   if (!view)
     return (
       <div className="launcher">
@@ -731,7 +763,12 @@ export function App() {
             </span>
             PromptDesk
           </a>
-          <span className="beta">开发预览 · V0.1</span>
+          <div className="launcher-nav-actions">
+            <button className="account-nav-button" onClick={() => navigate('/account')}>
+              登录 / 注册
+            </button>
+            <span className="beta">开发预览 · V0.1</span>
+          </div>
         </nav>
         <main className="launcher-main">
           {migrationRecovery ? (
@@ -924,6 +961,10 @@ export function App() {
                   <Plus size={19} />
                   创建新工作空间
                 </button>
+                <button className="large quick-capture-launch" onClick={() => navigate('/capture')}>
+                  <FileText size={18} />
+                  手机快速记录（仅此浏览器）
+                </button>
               </div>
               {!api.supported() && (
                 <p className="notice">
@@ -985,7 +1026,16 @@ export function App() {
     );
 
   return (
-    <div className={`workspace-app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <div
+      className={`workspace-app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${mobileNavOpen ? 'mobile-nav-open' : ''}`}
+    >
+      {mobileNavOpen && (
+        <button
+          className="mobile-nav-backdrop"
+          aria-label="关闭导航菜单"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
       <aside className="sidebar">
         <div className="sidebar-brand-row">
           <a
@@ -1021,10 +1071,23 @@ export function App() {
         </div>
         <button
           className={`nav-item ${location.pathname === '/' ? 'selected' : ''}`}
-          onClick={() => void go('/')}
+          onClick={() => {
+            setMobileNavOpen(false);
+            void go('/');
+          }}
         >
           <LayoutDashboard size={18} />
           工作台
+        </button>
+        <button
+          className={`nav-item ${location.pathname === '/capture' ? 'selected' : ''}`}
+          onClick={() => {
+            setMobileNavOpen(false);
+            void go('/capture');
+          }}
+        >
+          <FileText size={18} />
+          手机速记
         </button>
         <div className="section-label">
           项目
@@ -1041,7 +1104,10 @@ export function App() {
             <button
               key={p.id}
               className={`nav-item ${project?.id === p.id ? 'selected' : ''}`}
-              onClick={() => void go(`/project/${p.id}`)}
+              onClick={() => {
+                setMobileNavOpen(false);
+                void go(`/project/${p.id}`);
+              }}
             >
               <span className="project-dot" />
               <span>{p.name}</span>
@@ -1053,17 +1119,45 @@ export function App() {
           )}
         </div>
         <div className="sidebar-bottom">
-          <button className="nav-item" onClick={() => void go('/scratchpad')}>
+          <button
+            className="nav-item"
+            onClick={() => {
+              setMobileNavOpen(false);
+              void go('/scratchpad');
+            }}
+          >
             <FileText size={18} />
             临时草稿
           </button>
-          <button className="nav-item" onClick={() => void go('/deleted')}>
+          <button
+            className="nav-item"
+            onClick={() => {
+              setMobileNavOpen(false);
+              void go('/deleted');
+            }}
+          >
             <Trash2 size={17} />
             已删除
           </button>
-          <button className="nav-item" onClick={() => void go('/settings')}>
+          <button
+            className="nav-item"
+            onClick={() => {
+              setMobileNavOpen(false);
+              void go('/settings');
+            }}
+          >
             <Settings size={17} />
             设置
+          </button>
+          <button
+            className={`nav-item ${location.pathname === '/account' ? 'selected' : ''}`}
+            onClick={() => {
+              setMobileNavOpen(false);
+              void go('/account');
+            }}
+          >
+            <UserRound size={17} />
+            账户
           </button>
           <div className="local-badge">
             <ShieldCheck size={14} />
@@ -1073,6 +1167,14 @@ export function App() {
       </aside>
       <div className="workspace-content">
         <header className="topbar">
+          <button
+            className="mobile-nav-toggle"
+            aria-label={mobileNavOpen ? '关闭导航菜单' : '打开导航菜单'}
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen((open) => !open)}
+          >
+            ☰
+          </button>
           <span className="topbar-title">
             {project?.name ??
               (location.pathname === '/settings'
@@ -1345,7 +1447,9 @@ export function App() {
             />
           </section>
         ) : (
-          <div className="project-workspace">
+          <div
+            className={`project-workspace ${location.pathname.includes('/prompt/') ? 'mobile-editor-open' : ''}`}
+          >
             <section className="prompt-list">
               <div className="list-title">
                 <h2>
@@ -1357,6 +1461,16 @@ export function App() {
                   onClick={() => void createPrompt(project.id)}
                 >
                   <Plus size={18} />
+                </button>
+                <button
+                  className="mobile-edit-toggle"
+                  disabled={!doc || doc.meta.projectId !== project.id}
+                  onClick={() => {
+                    if (doc?.meta.projectId === project.id)
+                      navigate(`/project/${project.id}/prompt/${doc.meta.id}`);
+                  }}
+                >
+                  编辑器
                 </button>
               </div>
               <div className="search-field">
@@ -1370,10 +1484,18 @@ export function App() {
                 />
               </div>
               <div className="view-toggle">
-                <button className={!listView ? 'active' : ''} onClick={() => setListView(false)}>
+                <button
+                  className={!listView ? 'active' : ''}
+                  aria-pressed={!listView}
+                  onClick={() => setListView(false)}
+                >
                   工作流
                 </button>
-                <button className={listView ? 'active' : ''} onClick={() => setListView(true)}>
+                <button
+                  className={listView ? 'active' : ''}
+                  aria-pressed={listView}
+                  onClick={() => setListView(true)}
+                >
                   列表
                 </button>
               </div>
@@ -1395,7 +1517,9 @@ export function App() {
                   已完成 {completedPrompts.length}
                 </button>
               </div>
-              <div className={listView ? 'prompt-items' : 'prompt-items flow'}>
+              <div
+                className={listView ? 'prompt-items compact-list' : 'prompt-items workflow-list'}
+              >
                 {visiblePrompts.map((p) => (
                   <div
                     className={`prompt-card ${doc?.meta.id === p.id && doc.meta.projectId === p.projectId ? 'active' : ''}`}
@@ -1416,7 +1540,9 @@ export function App() {
                         aria-label={`打开 ${p.id} ${p.title}`}
                       >
                         <small>
-                          {p.id} · {p.target}
+                          {listView
+                            ? `${p.id} · ${p.target}`
+                            : `第 ${p.order} 步 · ${p.id} · ${p.target}`}
                         </small>
                         <h3>{p.title}</h3>
                       </button>
@@ -1554,6 +1680,17 @@ export function App() {
               {doc && doc.meta.projectId === project.id ? (
                 <>
                   <div className="editor-heading">
+                    <button
+                      className="mobile-list-toggle"
+                      aria-label="返回提示词列表"
+                      onClick={() =>
+                        void (async () => {
+                          if (await flush()) navigate(`/project/${project.id}`);
+                        })()
+                      }
+                    >
+                      ← 提示词列表
+                    </button>
                     <span className="eyebrow">{doc.meta.id} / PROMPT</span>
                     <h1>{doc.meta.title}</h1>
                     <div className="prompt-meta">
@@ -1649,6 +1786,8 @@ export function App() {
                         key={`${doc.meta.projectId}:${doc.meta.id}`}
                         body={editor.body}
                         readonly={readonly}
+                        fontSize={editorFontSize}
+                        onFontSizeChange={changeEditorFontSize}
                         onChange={useEditorStore.getState().edit}
                         onSplitSelection={(selected, from, to) =>
                           void (async () => {

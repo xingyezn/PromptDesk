@@ -35,13 +35,8 @@ test('Markdown preview blocks remote resources and editing shortcuts never submi
   await expect(page.locator('.markdown-preview script')).toHaveCount(0);
   await expect(page.locator('.markdown-preview a[href^="javascript:"]')).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
-  const listBounds = await page.locator('.prompt-items').boundingBox();
-  const controlsBounds = await page.locator('.order-controls').boundingBox();
-  expect(listBounds).not.toBeNull();
-  expect(controlsBounds).not.toBeNull();
-  expect(controlsBounds!.y + controlsBounds!.height).toBeLessThanOrEqual(
-    listBounds!.y + listBounds!.height,
-  );
+  await page.getByRole('button', { name: '返回提示词列表' }).click();
+  await expect(page.getByRole('button', { name: '拖动排序 P001' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   expect(external).toEqual([]);
   expect(errors).toEqual([]);

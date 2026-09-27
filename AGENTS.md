@@ -1,6 +1,8 @@
+> **V0.3 当前产品约束（2026-09-27）**：用户明确要求关闭 GitHub Pages，取消本地工作空间。Cloudflare Workers 同源托管 React 前端/API，D1 是所有账户项目、提示词、历史版本的权威来源。登录后进入个人空间，API 根据会话 userId 隔离；管理员仅管理账户，不默认读取其他人的正文。旧章节仅是 V0.1/V0.2 历史规格，不再限制当前云端实现。既有本地文件保持原样，不自动导入。任务见 V0.3_TASKS.md。
+
 # Codex 开发约定：PromptDesk
 
-本文件应放在 PromptDesk 应用仓库根目录，对该仓库开发生效。目标是实现 README、TECH_SPEC、DATA_SCHEMA 和 V0.1_TASKS 定义的 V0.1，不自行加入云端或模型执行能力。
+本文件应放在 PromptDesk 应用仓库根目录，对该仓库开发生效。V0.1 仍按 README、TECH_SPEC、DATA_SCHEMA 和 V0.1_TASKS 实现；用户于 2026-09-27 明确批准 V0.2 增加手机/PWA、Cloudflare Workers 后端、账户和用户主动触发的模型优化，详细范围见 V0.2_TASKS.md。不得把 V0.2 能力混入 V0.1 数据/写入边界，也不得据此推断云同步或自动发送获批。
 
 ## 1. 开工与范围
 
@@ -15,7 +17,7 @@
 
 ## 2. 架构硬边界
 
-- 必须纯前端 React + TypeScript + Vite，GitHub Pages 能独立运行；不要求用户启动本地服务。
+- V0.1 必须是 React + TypeScript + Vite 静态应用并可独立运行于 GitHub Pages；V0.2 可加入 Cloudflare Worker API，但本地业务开发仍可用受控的 Wrangler 测试环境。
 - filesystem 层独占 File System Access API；cache 层独占 Dexie；clipboard service 独占剪贴板访问。UI 通过 service/use case 调用，不能散落访问浏览器存储或文件 API。
 - domain 只依赖纯 TypeScript；services 不导入 stores/components；Zustand 不作为磁盘数据权威来源。
 - 所有业务写入走同一 Workspace 队列与可恢复事务；禁止另写“快速保存”路径。
@@ -61,11 +63,11 @@
 
 ## 6. 禁止事项
 
-不得加入：后端、云数据库、登录/OAuth、GitHub 数据存储、云同步、LLM API/SDK、第三方 analytics/远程错误监控、自动读取/发送模型对话、Git 自动提交 Workspace。
+V0.1 范围不得加入后端、云数据库、登录/OAuth、云同步或 LLM API。V0.2 可按 V0.2_TASKS 添加 Worker、账户存储、服务商 API 和用户显式点击的提示词优化；仍禁止自动读取/发送模型对话、自动上传 Workspace、GitHub 数据存储、Git 自动提交 Workspace、第三方 analytics/远程错误监控。
 
-不得通过 fetch/XHR/WebSocket/sendBeacon 发出业务内容；不得在 URL、查询参数、fragment 中放正文/本地路径；不得为 Markdown 预览加载远程图片/字体或执行 raw HTML。链接必须经安全协议过滤并由用户点击，不能后台预抓取。
+除 V0.2 明确批准的身份、账户设置和用户确认后的模型优化 API 外，不得通过 fetch/XHR/WebSocket/sendBeacon 发出业务内容。提示词正文只有在用户查看将发送内容/目标服务商并主动确认后才能发给 Worker/模型；不得后台重试发送或写入请求日志。不得在 URL、查询参数、fragment 中放正文/本地路径；不得为 Markdown 预览加载远程图片/字体或执行 raw HTML。链接必须经安全协议过滤并由用户点击，不能后台预抓取。
 
-不得将真实 Workspace 放进仓库、public、src、fixtures、CI artifact 或 Pages dist；不得用 VITE_ 保存秘密，不假定 GitHub Pages 提供服务端密钥隔离。不得为了“不支持的浏览器”偷偷改用 IndexedDB 作为唯一业务库。
+不得将真实 Workspace 放进仓库、public、src、fixtures、CI artifact 或 Pages dist；不得用 VITE_ 保存秘密，不假定 GitHub Pages 提供服务端密钥隔离。模型/API 密钥只能由 Worker 服务端 secret 或经过独立审计的用户密钥存储处理。不得为了“不支持的浏览器”偷偷改用 IndexedDB 冒充用户已授权的 Workspace；手机快速记录必须是单独标记的存储域。
 
 不得宣称完整离线启动、操作系统级锁、多浏览器/多电脑同步、无损瞬间关闭、完全原子多文件写入或原生权限已经被 mock 测试覆盖。PRD 非目标不得通过依赖“顺便加入”。
 

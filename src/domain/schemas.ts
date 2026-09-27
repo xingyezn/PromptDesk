@@ -211,6 +211,12 @@ export const scratchpadSchema = z
     transferredAt: iso.nullable(),
   })
   .passthrough();
+export const quickNoteRecordSchema = z.object({
+  id: z.string().regex(/^note_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+  body: z.string().min(1).max(10_000),
+  createdAt: iso,
+  updatedAt: iso,
+});
 export const legacyScratchpadSchema = scratchpadSchema.extend({ schemaVersion: z.literal(1) });
 const relativePath = z
   .array(z.string())

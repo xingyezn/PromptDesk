@@ -16,6 +16,27 @@ test('direct creation, todo completion, formatting, settings, ZIP and migration'
   await page.getByRole('button', { name: '确认', exact: true }).click();
   await page.getByRole('button', { name: '新建 Prompt', exact: true }).last().click();
   await expect(page.getByRole('button', { name: '复制 Prompt', exact: true })).toBeVisible();
+  const promptItems = page.locator('.prompt-items');
+  await expect(promptItems).toHaveClass(/compact-list/);
+  await page.getByRole('button', { name: '工作流', exact: true }).click();
+  await expect(promptItems).toHaveClass(/workflow-list/);
+  await page.getByRole('button', { name: '列表', exact: true }).click();
+  await expect(page.getByRole('button', { name: '放大编辑区文字', exact: true })).toBeVisible();
+  await expect(page.getByText('15px', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '放大编辑区文字', exact: true }).click();
+  await expect(page.getByText('16px', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.prompt-list')).toBeHidden();
+  await expect(page.locator('.editor-pane')).toBeVisible();
+  await page.getByRole('button', { name: '返回提示词列表', exact: true }).click();
+  await expect(page.locator('.prompt-list')).toBeVisible();
+  await expect(page.locator('.editor-pane')).toBeHidden();
+  await page.getByRole('button', { name: '打开 P001 未命名提示词', exact: true }).click();
+  await expect(page.locator('.editor-pane')).toBeVisible();
+  await page.getByRole('button', { name: '打开导航菜单', exact: true }).click();
+  await expect(page.getByRole('button', { name: '临时草稿', exact: true })).toBeVisible();
+  await page.locator('.mobile-nav-backdrop').click({ position: { x: 370, y: 420 } });
+  await page.setViewportSize({ width: 1280, height: 800 });
   const body = page.getByRole('textbox', { name: 'Prompt 正文' });
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await body.fill('合成第一条正文');
@@ -42,6 +63,9 @@ test('direct creation, todo completion, formatting, settings, ZIP and migration'
   await expect(
     page.getByRole('heading', { name: '合成可选标题', exact: true, level: 1 }),
   ).toBeVisible();
+  await body.fill('');
+  await page.getByRole('button', { name: '有序列表', exact: true }).click();
+  await expect(body).not.toContainText('内容');
   await body.fill('');
   await page.getByRole('button', { name: '无序列表', exact: true }).click();
   await body.press('End');
