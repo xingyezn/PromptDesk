@@ -3,7 +3,7 @@
 ## V0.3 云端架构与接口（当前）
 
 - React/TypeScript/Vite 前端与 Worker API 同源，D1 为业务权威来源。主入口 CloudApp，不再调用目录授权或 IndexedDB 业务缓存。旧 App/Workspace 实现保留为历史代码，未进入当前发布入口。
-- `src/domain/cloud.ts`：Zod DTO、显式请求白名单；`src/services/api/cloudClient.ts`：唯一云端请求入口；`src/app/useCloudEditor.ts`：串行保存、防抖 2 秒、会话/实体隔离、旧保存完成不覆盖新输入；`worker/cloud.ts`：会话租户边界、SQL、配额和事务；`worker/auth.ts`：Better Auth；`worker/migrations`：前向 D1 迁移。
+- `src/domain/cloud.ts`：Zod DTO、显式请求白名单；`src/services/api/cloudClient.ts`：唯一云端请求入口；`src/app/useCloudEditor.ts`：串行保存、防抖 20 秒、会话/实体隔离、旧保存完成不覆盖新输入；编辑区 Ctrl/Cmd+S 与顶部保存按钮立即保存草稿；`worker/cloud.ts`：会话租户边界、SQL、配额和事务；`worker/auth.ts`：Better Auth；`worker/migrations`：前向 D1 迁移。
 - GET `/api/me` 返回角色/停用/强制改密。GET/POST `/api/projects`；PATCH `/api/projects/:id`（revision）；GET/POST `/api/projects/:id/prompts`；POST `/api/projects/:id/order`（revision、完整 ID 集合）。GET/PATCH `/api/prompts/:id`；GET `.../versions`；POST `.../split`（revision、字符选区）。所有 ID 所有权来自会话，客户端不能提交 ownerId。
 - 401 未登录，403 停用/未改初始密码/只读/Origin 不符，404 不存在或不可访问，409 revision 冲突，422 条数限制，429 写入限流，503 存储或服务不可用。未知 JSON 严格 Zod 校验；请求流最多 512,000 字节；Auth 最多 16 KiB。POST/PATCH 强制 Origin 与配置 origin 相同，不开放跨域/CORS。
 - D1 `batch` 原子提交：CAS 更新的 operation 随机 token 控制后续 INSERT/排序写入，CAS 未命中不会产生版本或改变顺序。恢复原子增加当前正文检查点和恢复版本，不修改旧版本。自动保存无版本；进入 ready/completed、手动保存产生版本。编号取 nextVersion，不取列表长度。DB trigger 禁止修改历史版本。
@@ -11,7 +11,7 @@
 - 用户列表每页 25，所有非管理查询按 ownerId 索引限定，项目/提示词有应用上限，不无界扫描。管理员 GET `/api/admin/users?offset=`；PATCH `.../:id` 允许 disabled/password；DELETE 同路径需 confirmation=删除用户，永久级联删除该用户空间。两者拒绝自管理及管理员目标。停用/重置撤销全部 session；重置后强制改密；管理员不可删除自身账户。普通用户账户删除级联删除其云端数据。
 - 默认管理员由 `scripts/bootstrap-admin.mjs production <仓库外私密文件>` 初始化，保留已有管理员，不覆盖。账号 admin@prompt.com，密码随机生成并在文件本地交付，首次登录必须通过正常 change-password 修改。2026-09-27 用户明确指定重设已有管理员账号/密码，本次保留 userId 和个人空间、撤销旧会话，用户自选密码不再标记临时密码。密码不进入代码或文档。新旧保留邮箱均禁止公开注册。保留邮箱验证/邮件发送关闭，不支持邮件找回。
 - 当前只保留 Production 服务。2026-09-27 用户要求停止继续测试、直接使用单一生产站，Preview Worker 已删除，Preview D1 仅保留为备份、不绑定活动部署。历史 Production/Preview 账户与数据隔离，未自动合并。workers.dev 的 openedutools 是账户级子域，不表示调用其他项目；不更改该子域以免影响账户内其他应用。保留旧测试地址的前端辨识代码作为兼容提示，不代表提供测试站。登录邮箱去除首尾空白并转小写，密码保持原样。
-- 移动端 ≤700px 为项目/列表/编辑单栏底部导航，44px 主要触控目标、16px 表单输入、安全区；编辑顶部保留复制/预览，次要操作用“提示词操作”开关展开，常驻保存反馈不折叠。正文可调字体、格式工具栏横向滚动；列表圆形完成按钮、状态文案与颜色、拖拽/键盘排序，完成项分组收起；项目可以顶部改名/归档/删除/恢复。viewport 使用 interactive-widget=resizes-content，软键盘行为仍需手机真机检查。
+- 移动端 ≤700px 为项目/列表/编辑单栏底部导航，44px 主要触控目标、16px 表单输入、安全区；编辑顶部保留复制/预览，次要操作用“提示词操作”开关展开，常驻保存反馈不折叠。正文可调字体、窄屏格式工具栏自动换行；列表圆形完成按钮、状态文案与颜色、拖拽/键盘排序，完成项分组收起；项目可以顶部改名/归档/删除/恢复。viewport 使用 interactive-widget=resizes-content，软键盘行为仍需手机真机检查。
 - PWA 仅缓存静态 shell；API/cache-control no-store，正文不进入 SW/IndexedDB/URL。联网登录读取和写入，断网不会声称已保存；页面关闭前未保存有提示，不承诺断网完整业务或强制关闭无损。
 - 本地开发工具保留独立 test D1，启动只清理该库合成账户和 rateLimit，不是线上服务。当前只发布 production，必要的前向 migration 直接在 production 执行；wrangler 无 preview 部署环境，默认本地绑定也不指向归档的 Preview 库。Pages workflow 已移除，发布通过 Cloudflare CLI，不在 GitHub 放秘密。停止追加测试遵循用户本次指示，已有验证记录保留。
 

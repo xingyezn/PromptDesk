@@ -78,7 +78,7 @@ export function useCloudEditor(
   }, []);
   useEffect(() => {
     if (!draft || sequence.current === persisted.current || paused.current) return;
-    const timer = window.setTimeout(() => void save(), 2000);
+    const timer = window.setTimeout(() => void save(), 20_000);
     return () => window.clearTimeout(timer);
   }, [draft, save]);
   useEffect(() => {

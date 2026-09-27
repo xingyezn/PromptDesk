@@ -84,6 +84,22 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
   const readonly = Boolean(project?.archived || project?.deletedAt || editor.draft?.deletedAt);
 
   useEffect(() => {
+    const saveShortcut = (event: KeyboardEvent) => {
+      if (
+        event.isComposing ||
+        !(event.ctrlKey || event.metaKey) ||
+        event.key.toLowerCase() !== 's' ||
+        !document.querySelector('.cloud-editor')?.contains(document.activeElement)
+      )
+        return;
+      event.preventDefault();
+      void editor.flush();
+    };
+    window.addEventListener('keydown', saveShortcut);
+    return () => window.removeEventListener('keydown', saveShortcut);
+  }, [editor.flush]);
+
+  useEffect(() => {
     const epochRef = selectionEpoch;
     alive.current = true;
     void cloudClient
@@ -601,6 +617,14 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
                 </button>
                 <button aria-pressed={preview} onClick={() => setPreview(!preview)}>
                   {preview ? '编辑' : '预览'}
+                </button>
+                <button
+                  className="cloud-save-button"
+                  disabled={busy || readonly}
+                  aria-label="保存提示词"
+                  onClick={() => void editor.flush()}
+                >
+                  保存
                 </button>
                 <button
                   className="cloud-editor-tools-toggle"

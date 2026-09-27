@@ -6,7 +6,7 @@
 
 登录后打开个人空间，项目、提示词和历史版本保存于 Cloudflare D1。支持电脑和手机；不发送邮箱验证邮件。GitHub 仓库只保存代码，GitHub Pages 关闭。
 
-默认管理员登录名为 `admin@prompt.com`，密码由管理员私下保管，不写入仓库。只提供上面的正式版入口，Preview Worker 已关闭，原测试数据库保留为备份而不提供服务；`openedutools` 是 Cloudflare 账户级地址后缀。手机底部导航切换项目/提示词/编辑，顶部复制；点“提示词操作”可展开状态、优先级与保存操作。
+默认管理员登录名为 `admin@prompt.com`，密码由管理员私下保管，不写入仓库。只提供上面的正式版入口，Preview Worker 已关闭，原测试数据库保留为备份而不提供服务；`openedutools` 是 Cloudflare 账户级地址后缀。手机底部导航切换项目/提示词/编辑，顶部复制；点“提示词操作”可展开状态、优先级与保存操作。提示词停止输入 20 秒后自动保存；编辑区内按 Ctrl/Cmd+S 或点击顶部“保存”立即保存。窄屏下格式工具栏自动换行。
 
 开发：`npm ci`；`node scripts/dev-cloud.mjs`（独立合成测试环境 8789，启动清理该 test 库合成账户）。正常开发使用 `npm run build:worker`、本地 migration、`npm run worker:dev`，在 .dev.vars 配置私密 BetterAuth secret。`npm run dev` 只有前端，不能单独运行登录业务。
 

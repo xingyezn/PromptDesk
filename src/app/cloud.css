@@ -58,6 +58,9 @@
 .cloud-app .cloud-editor-tools-toggle {
   display: none;
 }
+.cloud-app .cloud-save-button {
+  min-height: 36px;
+}
 .cloud-personal {
   display: inline-flex;
   gap: 6px;
@@ -575,6 +578,11 @@
     flex-shrink: 0;
     width: 44px;
   }
+  .cloud-app .cloud-save-button {
+    min-height: 44px;
+    flex-shrink: 0;
+    padding-inline: 9px;
+  }
   .cloud-editor-tools-toggle[aria-expanded='true'] {
     background: #e6eee5;
     color: #245b43;
@@ -606,15 +614,17 @@
     min-height: 32px;
   }
   .cloud-composer .format-toolbar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    overflow: visible;
     padding: 4px 8px;
   }
   .cloud-composer .format-toolbar button {
     min-height: 44px;
     flex-shrink: 0;
   }
-  .cloud-composer .format-toolbar label {
+  .cloud-composer .format-toolbar .editor-font-size {
+    display: inline-flex;
+    align-items: center;
     flex-shrink: 0;
   }
   .cloud-list-tools input,
