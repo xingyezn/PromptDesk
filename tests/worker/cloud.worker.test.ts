@@ -2,7 +2,15 @@ import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import worker from '../../worker/index';
-import { cloudProjectSchema, cloudPromptSchema, cloudVersionSchema } from '../../src/domain/cloud';
+import {
+  cloudExportSchema,
+  cloudProjectSchema,
+  cloudPromptSchema,
+  cloudShareSchema,
+  cloudSharedProjectSchema,
+  cloudSpaceSchema,
+  cloudVersionSchema,
+} from '../../src/domain/cloud';
 import { z } from 'zod';
 
 const origin = 'https://promptdesk-preview.openedutools.workers.dev';
@@ -56,6 +64,12 @@ async function prompt(cookie: string, id: string) {
 }
 
 describe('Cloud personal spaces', () => {
+  it('creates a new prompt with an ordered-list default body', async () => {
+    const a = await user(),
+      p = await project(a.cookie),
+      item = await prompt(a.cookie, p.id);
+    expect(item.body).toBe('1. ');
+  });
   it('isolates projects, prompts and versions by server session and rejects forged ownership and origin', async () => {
     const a = await user(),
       b = await user(),
@@ -204,6 +218,115 @@ describe('Cloud personal spaces', () => {
     expect(
       (await call(`/prompts/${one.id}`, a.cookie, 'PATCH', { revision: 3, body: 'bad' })).status,
     ).toBe(403);
+  });
+  it('colors projects, orders them with a revision guard, and exports', async () => {
+    const a = await user(),
+      b = await user(),
+      first = await project(a.cookie),
+      second = await project(a.cookie),
+      item = await prompt(a.cookie, first.id);
+    await call(`/prompts/${item.id}`, a.cookie, 'PATCH', {
+      revision: 1,
+      body: 'Synthetic export body',
+      checkpoint: true,
+    });
+    expect(first.color).toBe('green');
+    const recolored = cloudProjectSchema.parse(
+      await (
+        await call(`/projects/${first.id}`, a.cookie, 'PATCH', {
+          revision: first.revision,
+          color: 'blue',
+        })
+      ).json(),
+    );
+    expect(recolored.color).toBe('blue');
+    expect(
+      (await call(`/projects/${first.id}`, a.cookie, 'PATCH', { revision: 1, color: 'neon' }))
+        .status,
+    ).toBe(400);
+
+    const space = cloudSpaceSchema.parse(await (await call('/space', a.cookie)).json());
+    expect(space.projects.map((p) => p.id)).toEqual(expect.arrayContaining([first.id, second.id]));
+    const activeIds = space.projects.filter((p) => !p.deletedAt).map((p) => p.id);
+    expect(
+      (
+        await call('/projects/order', a.cookie, 'POST', {
+          revision: space.revision,
+          ids: activeIds,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await call('/projects/order', a.cookie, 'POST', {
+          revision: space.revision,
+          ids: activeIds,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (await call('/projects/order', a.cookie, 'POST', { revision: 2, ids: [first.id] })).status,
+    ).toBe(400);
+    const ordered = cloudSpaceSchema.parse(await (await call('/space', a.cookie)).json());
+    expect(ordered.projects.filter((p) => !p.deletedAt).map((p) => p.id)).toEqual(activeIds);
+
+    const exported = cloudExportSchema.parse(
+      await (await call(`/export?scope=project&id=${first.id}`, a.cookie)).json(),
+    );
+    expect(exported.projects).toHaveLength(1);
+    expect(exported.projects[0]!.prompts[0]!.prompt.body).toBe('Synthetic export body');
+    expect(exported.projects[0]!.prompts[0]!.versions).toHaveLength(1);
+    expect(
+      cloudExportSchema.parse(await (await call('/export?scope=space', a.cookie)).json()).projects,
+    ).toHaveLength(2);
+    expect((await call(`/export?scope=project&id=${first.id}`, b.cookie)).status).toBe(404);
+    expect((await call('/export?scope=space', b.cookie)).status).toBe(404);
+    expect((await call('/export?scope=bad', a.cookie)).status).toBe(400);
+    expect(await (await call('/space', b.cookie)).json()).toEqual({ revision: 1, projects: [] });
+  });
+  it('shares a project read-only through an anonymous, revocable link', async () => {
+    const a = await user(),
+      b = await user(),
+      p = await project(a.cookie),
+      item = await prompt(a.cookie, p.id);
+    await call(`/prompts/${item.id}`, a.cookie, 'PATCH', {
+      revision: 1,
+      body: 'Synthetic shared body',
+    });
+    expect((await call(`/projects/${p.id}/share`, b.cookie)).status).toBe(404);
+    expect(
+      cloudShareSchema.parse(await (await call(`/projects/${p.id}/share`, a.cookie)).json()).active,
+    ).toBe(false);
+    const created = cloudShareSchema.parse(
+      await (await call(`/projects/${p.id}/share`, a.cookie, 'POST', {})).json(),
+    );
+    expect(created.active).toBe(true);
+    expect(created.token).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    const again = cloudShareSchema.parse(
+      await (await call(`/projects/${p.id}/share`, a.cookie, 'POST', {})).json(),
+    );
+    expect(again.token).toBe(created.token);
+
+    const anonymous = await call(`/share/${created.token}`, '');
+    expect(anonymous.status).toBe(200);
+    const shared = cloudSharedProjectSchema.parse(await anonymous.json());
+    expect(shared.project.name).toBe(p.name);
+    expect(shared.prompts).toHaveLength(1);
+    expect(shared.prompts[0]!.body).toBe('Synthetic shared body');
+    const raw = await (await call(`/share/${created.token}`, '')).text();
+    for (const leak of ['ownerId', 'versions', 'revision', 'nextVersion'])
+      expect(raw).not.toContain(leak);
+    expect((await call('/share/abcdefghijklmnop', '')).status).toBe(404);
+
+    expect((await call(`/projects/${p.id}/share`, a.cookie, 'DELETE', {})).status).toBe(200);
+    expect((await call(`/share/${created.token}`, '')).status).toBe(404);
+    expect(
+      cloudShareSchema.parse(await (await call(`/projects/${p.id}/share`, a.cookie)).json()).active,
+    ).toBe(false);
+    const recreated = cloudShareSchema.parse(
+      await (await call(`/projects/${p.id}/share`, a.cookie, 'POST', {})).json(),
+    );
+    expect(recreated.token).not.toBe(created.token);
   });
   it('requires initial password change and revokes all sessions for suspended users', async () => {
     const admin = await user(),

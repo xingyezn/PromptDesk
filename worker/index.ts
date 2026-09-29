@@ -1,6 +1,6 @@
 import type { ExecutionContext } from '@cloudflare/workers-types';
 import { createAuth, type AuthEnvironment } from './auth';
-import { cloudJson, getAccess, handleCloud } from './cloud';
+import { cloudJson, getAccess, handleCloud, handlePublicShare } from './cloud';
 
 interface StaticAssetsPort {
   fetch(request: Request): Promise<Response>;
@@ -154,6 +154,8 @@ export async function handleWorkerRequest(
     return env.ASSETS.fetch(request);
   }
 
+  if (url.pathname.startsWith('/api/share/')) return handlePublicShare(request, env, url);
+
   if (url.pathname === '/api/auth' || url.pathname.startsWith('/api/auth/')) {
     if (DISABLED_EMAIL_AUTH_PATHS.has(url.pathname.replace(/\/+$/, ''))) {
       return jsonResponse({ error: 'EMAIL_FEATURES_DISABLED' }, 404);
@@ -161,7 +163,7 @@ export async function handleWorkerRequest(
     return authResponse(request, env);
   }
   if (url.pathname !== '/api/health') {
-    if (!/^\/api\/(?:me|projects(?:\/.*)?|prompts\/.*|admin\/.*)$/.test(url.pathname))
+    if (!/^\/api\/(?:me|space|export|projects(?:\/.*)?|prompts\/.*|admin\/.*)$/.test(url.pathname))
       return jsonResponse({ error: 'NOT_FOUND' }, 404);
     return handleCloud(request, env);
   }

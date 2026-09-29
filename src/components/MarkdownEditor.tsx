@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { EditorState } from '@codemirror/state';
+import { Annotation, ChangeSet, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownKeymap } from '@codemirror/lang-markdown';
-import { formatLabels, formatSelection, type FormatKind } from '../domain/formatting';
+import {
+  formatLabels,
+  formatSelection,
+  renumberOrderedList,
+  type FormatKind,
+} from '../domain/formatting';
+
+const renumberAnnotation = Annotation.define<boolean>();
 
 export function MarkdownEditor({
   body,
@@ -44,6 +51,35 @@ export function MarkdownEditor({
           EditorView.editable.of(!readonly),
           EditorState.readOnly.of(readonly),
           EditorView.contentAttributes.of({ 'aria-label': 'Prompt 正文' }),
+          EditorState.transactionFilter.of((transaction) => {
+            // Only renumber on user deletions; external sync, programmatic edits and IME
+            // never trigger it. Compose the renumber into a single transaction so cursor
+            // and undo stay coherent; the annotation guard prevents re-processing.
+            if (
+              !transaction.docChanged ||
+              syncing.current ||
+              transaction.annotation(renumberAnnotation) ||
+              !transaction.isUserEvent('delete')
+            )
+              return transaction;
+            const doc = transaction.newDoc,
+              touched: number[] = [];
+            transaction.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+              const start = doc.lineAt(Math.min(fromB, doc.length)).number,
+                end = doc.lineAt(Math.min(toB, doc.length)).number;
+              for (let line = start; line <= end; line++) touched.push(line - 1);
+            });
+            const changes = renumberOrderedList(doc.toString(), touched);
+            if (!changes.length) return transaction;
+            const renumber = ChangeSet.of(changes, doc.length);
+            return transaction.startState.update({
+              changes: transaction.changes.compose(renumber),
+              selection: transaction.selection?.map(renumber),
+              annotations: renumberAnnotation.of(true),
+              userEvent: 'input.renumber',
+              scrollIntoView: transaction.scrollIntoView,
+            });
+          }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !syncing.current)
               callback.current(update.state.doc.toString());

@@ -14,6 +14,10 @@
 - 移动端 ≤700px 为项目/列表/编辑单栏底部导航，44px 主要触控目标、16px 表单输入、安全区；编辑顶部保留复制/预览，次要操作用“提示词操作”开关展开，常驻保存反馈不折叠。正文可调字体、窄屏格式工具栏自动换行；列表圆形完成按钮、状态文案与颜色、拖拽/键盘排序，完成项分组收起；项目可以顶部改名/归档/删除/恢复。viewport 使用 interactive-widget=resizes-content，软键盘行为仍需手机真机检查。
 - 桌面及窄屏双栏布局使用两个可键盘操作的垂直分隔条，分别调整项目栏与提示词列表宽度，编辑区占用剩余宽度；面板具有最小宽度，视口变窄时自动收缩。≤700px 单栏移动导航隐藏分隔条。
 - PWA 仅缓存静态 shell；API/cache-control no-store，正文不进入 SW/IndexedDB/URL。联网登录读取和写入，断网不会声称已保存；页面关闭前未保存有提示，不承诺断网完整业务或强制关闭无损。
+- 03-10 批次 A：新建提示词正文默认 `1. `；编辑器底部显示字数与 `tokenEstimate` 粗估（不落库）。有序列表在用户删除行时由 CodeMirror `transactionFilter` 按连续块重编号（保留缩进与分隔符，跳过 IME、外部同步与程序化改动，与删除合并为单事务）。每个项目上次编辑的提示词 ID 仅存本机 `localStorage`，打开项目时自动加载，新项目保持列表。
+- 03-11 批次 B（schema=4）：新增 `cloud_space`，`cloud_project` 增加 `sortOrder/color`。GET `/api/space` 返回 `{revision, projects}`（含归档/已删除，供列表分组）；项目栏「列表 / 文件夹」两种样式只是同一项目集合的呈现方式，**不新建文件夹分组**，颜色属于项目。POST `/api/projects/order` 用 `cloud_space.revision` + operation token 做 CAS，`ids` 必须是当前全部未删除项目 ID 集合。GET `/api/export?scope=project|space[&id=]` 只读返回项目/提示词/历史版本，由前端用 fflate 生成 ZIP（服务端不落文件）；导出只含文本，不含图片。
+- 03-11 拖拽优化：项目与提示词排序统一用 Pointer Events（去掉 HTML5 draggable 冲突），拖动时高亮目标（`drop-target`）、弱化来源（`dragging`）并显示 `role=status` 提示；支持 Esc 取消与方向键排序；手柄增大到 22px 并加 hover 反馈。
+- 03-12 批次 C（schema=5）：新增 `cloud_share`，每项目至多一条只读分享链接。已登录所有者 GET/POST/DELETE `/api/projects/:id/share` 读取状态/创建或复用/撤销；`POST` 对已撤销项生成新 token，归档项目可分享、已删除项目拒绝。**匿名** `GET /api/share/:token` 是唯一免会话业务读路径：按 IP 限流（120/分钟），未知或已撤销 token 返回 404，仅返回项目名/描述与未删除提示词的标题/正文，绝不返回 ownerId、版本或 revision；响应 no-store/nosniff。前端 `/share/:token` 为只读页，复用 `MarkdownPreview`（禁图片/raw HTML），不加载会话。
 - 本地开发工具保留独立 test D1，启动只清理该库合成账户和 rateLimit，不是线上服务。当前只发布 production，必要的前向 migration 直接在 production 执行；wrangler 无 preview 部署环境，默认本地绑定也不指向归档的 Preview 库。Pages workflow 已移除，发布通过 Cloudflare CLI，不在 GitHub 放秘密。停止追加测试遵循用户本次指示，已有验证记录保留。
 
 容量参考：[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Workers 价格](https://developers.cloudflare.com/workers/platform/pricing/)。约100名文字用户可由现有架构承载，但免费日读写及单库容量是硬边界。高频持续编辑可能超过免费额度；未自动升级付费计划。数据库灾难恢复使用 D1 Time Travel/运维导出，上线后仍应定期演练，不把版本管理当数据库备份。

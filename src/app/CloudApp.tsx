@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Menu,
   Plus,
@@ -17,21 +18,62 @@ import { authClient } from '../services/api/authClient';
 import { isPreviewDeployment } from '../services/api/deployment';
 import { cloudClient, cloudErrorMessage } from '../services/api/cloudClient';
 import { copyText } from '../services/clipboard/clipboard';
+import { tokenEstimate } from '../domain/policies';
 import {
   cloudLabels,
   type CloudAccess,
   type CloudProject,
   type CloudPrompt,
+  type CloudShare,
   type CloudVersion,
 } from '../domain/cloud';
 import { AccountPage } from '../components/AccountPage';
 import { ChangePassword, UserManagement } from '../components/CloudAccountTools';
+import {
+  CloudProjectNavigator,
+  projectColors,
+  type ProjectColor,
+} from '../components/CloudProjectNavigator';
 import { MarkdownEditor } from '../components/MarkdownEditor';
 import { MarkdownPreview } from '../components/MarkdownPreview';
+import { SharedProjectPage } from '../components/SharedProjectPage';
+import { downloadCloudArchive } from '../services/archive/cloudArchive';
 import { useCloudEditor } from './useCloudEditor';
 import './cloud.css';
 
+// Remembers the last edited prompt per project in this browser only; no content or path is stored.
+const lastPromptKey = (projectId: string) => `promptdesk:cloud:last-prompt:${projectId}`;
+function readLastPrompt(projectId: string): string | null {
+  try {
+    return window.localStorage.getItem(lastPromptKey(projectId));
+  } catch {
+    return null;
+  }
+}
+function rememberLastPrompt(projectId: string, promptId: string) {
+  try {
+    window.localStorage.setItem(lastPromptKey(projectId), promptId);
+  } catch {
+    // Private mode or disabled storage: auto-open simply stays off.
+  }
+}
+
+// List preview for untitled prompts: first line with real content, ignoring bare list markers
+// such as the default `1. ` placeholder.
+function promptPreview(body: string): string | null {
+  for (const line of body.split('\n')) {
+    const text = line.replace(/^\s*(?:[-*+]|\d+[.)])\s*/, '').trim();
+    if (text) return text.slice(0, 65);
+  }
+  return null;
+}
+
+function shareUrl(token: string): string {
+  return `${window.location.origin}${import.meta.env.BASE_URL}#/share/${token}`;
+}
+
 export function CloudApp() {
+  const location = useLocation();
   const { data: session, isPending } = authClient.useSession();
   const [protectedUser, setProtectedUser] = useState<{ id: string; name: string } | null>(null);
   const onUnsaved = useCallback(
@@ -40,6 +82,8 @@ export function CloudApp() {
     },
     [session?.user],
   );
+  if (location.pathname.startsWith('/share/'))
+    return <SharedProjectPage token={decodeURIComponent(location.pathname.slice(7))} />;
   const user = protectedUser ?? session?.user;
   if (isPending && !user)
     return (
@@ -54,6 +98,7 @@ export function CloudApp() {
 function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: boolean) => void }) {
   const [access, setAccess] = useState<CloudAccess | null>(null),
     [projects, setProjects] = useState<CloudProject[]>([]),
+    [spaceRevision, setSpaceRevision] = useState(1),
     [projectId, setProjectId] = useState<string | null>(null);
   const [prompts, setPrompts] = useState<CloudPrompt[]>([]),
     [versions, setVersions] = useState<CloudVersion[]>([]);
@@ -70,9 +115,10 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     [query, setQuery] = useState(''),
     [preview, setPreview] = useState(false),
     [fontSize, setFontSize] = useState(16);
-  const [newProject, setNewProject] = useState(false),
-    [newName, setNewName] = useState(''),
-    [projectSettings, setProjectSettings] = useState(false);
+  const [projectSettings, setProjectSettings] = useState(false);
+  const [share, setShare] = useState<CloudShare | null>(null);
+  const [promptDragging, setPromptDragging] = useState<string | null>(null),
+    [promptOver, setPromptOver] = useState<string | null>(null);
   const [projectName, setProjectName] = useState(''),
     [description, setDescription] = useState('');
   const selectionEpoch = useRef(0),
@@ -85,6 +131,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     (prompt) => setPrompts((items) => items.map((item) => (item.id === prompt.id ? prompt : item))),
     onUnsaved,
   );
+  const flush = editor.flush;
   const project = projects.find((p) => p.id === projectId);
   const readonly = Boolean(project?.archived || project?.deletedAt || editor.draft?.deletedAt);
   const projectWidthMax = Math.max(140, window.innerWidth - listWidth - 276);
@@ -152,11 +199,11 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
       )
         return;
       event.preventDefault();
-      void editor.flush();
+      void flush();
     };
     window.addEventListener('keydown', saveShortcut);
     return () => window.removeEventListener('keydown', saveShortcut);
-  }, [editor.flush]);
+  }, [flush]);
 
   useEffect(() => {
     const epochRef = selectionEpoch;
@@ -178,9 +225,11 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     if (!access || access.mustChangePassword) return;
     let active = true;
     void cloudClient
-      .projects()
-      .then((items) => {
-        if (active) setProjects(items);
+      .space()
+      .then((space) => {
+        if (!active) return;
+        setProjects(space.projects);
+        setSpaceRevision(space.revision);
       })
       .catch((error) => {
         if (active) setMessage(cloudErrorMessage(error));
@@ -200,9 +249,12 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
       if (alive.current) setBusy(false);
     }
   };
-  const refreshProjects = async () => {
-    const items = await cloudClient.projects();
-    if (alive.current) setProjects(items);
+  const refreshSpace = async () => {
+    const space = await cloudClient.space();
+    if (alive.current) {
+      setProjects(space.projects);
+      setSpaceRevision(space.revision);
+    }
   };
   const refreshPrompts = async (id: string) => {
     const items = await cloudClient.prompts(id);
@@ -218,8 +270,18 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     setProjectId(id);
     setPrompts(items);
     setVersions([]);
-    setPane('list');
     setProjectSettings(false);
+    setShare(null);
+    const remembered = readLastPrompt(id);
+    const target = remembered && items.find((item) => item.id === remembered && !item.deletedAt);
+    if (target) {
+      const item = await cloudClient.prompt(target.id);
+      if (!alive.current || epoch !== selectionEpoch.current) return;
+      editor.select(item);
+      setPane('editor');
+    } else {
+      setPane('list');
+    }
   };
   const openPrompt = async (prompt: CloudPrompt) => {
     if (!(await editor.flush())) return;
@@ -227,6 +289,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     const item = await cloudClient.prompt(prompt.id);
     if (!alive.current || epoch !== selectionEpoch.current) return;
     editor.select(item);
+    rememberLastPrompt(item.projectId, item.id);
     setVersions([]);
     setPane('editor');
   };
@@ -236,6 +299,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     if (!alive.current) return;
     setPrompts((items) => [...items, prompt]);
     editor.select(prompt);
+    rememberLastPrompt(prompt.projectId, prompt.id);
     setVersions([]);
     setPane('editor');
   };
@@ -260,12 +324,13 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     ids.splice(from, 1);
     ids.splice(to, 0, id);
     await cloudClient.order(project.id, project.revision, ids);
-    await refreshProjects();
+    await refreshSpace();
     await refreshPrompts(project.id);
   };
   const updateProject = async (patch: {
     name?: string;
     description?: string;
+    color?: ProjectColor;
     archived?: boolean;
     deleted?: boolean;
   }) => {
@@ -276,6 +341,50 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     });
     setProjects((items) => items.map((item) => (item.id === updated.id ? updated : item)));
     setProjectSettings(false);
+  };
+  const createProject = async (newName: string) => {
+    if (!(await editor.flush())) return;
+    const created = await cloudClient.createProject(newName);
+    setProjects((items) => [created, ...items]);
+    await openProject(created.id);
+  };
+  const projectOrder = [...projects]
+    .sort((a, b) => a.sortOrder - b.sortOrder || b.createdAt.localeCompare(a.createdAt))
+    .filter((item) => !item.deletedAt)
+    .map((item) => item.id);
+  const reorderProjects = async (id: string, targetId: string) => {
+    if (id === targetId || !(await editor.flush())) return;
+    const from = projectOrder.indexOf(id),
+      to = projectOrder.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const ids = [...projectOrder];
+    ids.splice(from, 1);
+    ids.splice(to, 0, id);
+    await cloudClient.orderProjects(spaceRevision, ids);
+    await refreshSpace();
+  };
+  const exportProject = (id: string, label: string) =>
+    void run(async () => {
+      downloadCloudArchive(await cloudClient.exportData('project', id), label);
+      setMessage('已生成项目压缩包下载。');
+    });
+  const exportSpace = () =>
+    void run(async () => {
+      downloadCloudArchive(await cloudClient.exportData('space'), '个人空间');
+      setMessage('已生成个人空间压缩包下载。');
+    });
+  const loadShare = async () => {
+    if (!project) return;
+    setShare(await cloudClient.share(project.id));
+  };
+  const createShare = async () => {
+    if (!project) return;
+    setShare(await cloudClient.createShare(project.id));
+  };
+  const revokeShare = async () => {
+    if (!project) return;
+    await cloudClient.revokeShare(project.id);
+    setShare(await cloudClient.share(project.id));
   };
   const accountContent = (
     <div className="cloud-settings-content">
@@ -315,6 +424,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
   const rows = [...prompts].sort(
     (a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt),
   );
+  const activeShareToken = share?.active ? share.token : null;
   const matches = (p: CloudPrompt) =>
     `${p.title}\n${p.body}`.toLowerCase().includes(query.toLowerCase());
   const activeRows = rows.filter((p) => !p.deletedAt && p.status !== 'completed' && matches(p)),
@@ -324,39 +434,53 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
     <li
       key={prompt.id}
       data-prompt-id={prompt.id}
-      className={`cloud-prompt-row status-${prompt.status} ${editor.draft?.id === prompt.id ? 'selected' : ''}`}
-      draggable={!busy && !readonly && !prompt.deletedAt}
-      onDragStart={() => {
-        dragged.current = prompt.id;
-      }}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        const id = dragged.current;
-        dragged.current = null;
-        if (id) void run(() => reorder(id, prompt.id));
-      }}
+      className={`cloud-prompt-row status-${prompt.status} ${
+        editor.draft?.id === prompt.id ? 'selected' : ''
+      } ${promptDragging === prompt.id ? 'dragging' : ''} ${
+        promptOver === prompt.id ? 'drop-target' : ''
+      }`}
     >
       <button
         className="cloud-drag"
+        title="按住拖动排序，或用方向键调整"
         aria-label={`拖动排序：${prompt.title}，方向键调整顺序`}
         disabled={busy || readonly || Boolean(prompt.deletedAt)}
         onPointerDown={(e) => {
+          e.preventDefault();
           dragged.current = prompt.id;
+          setPromptDragging(prompt.id);
+          setPromptOver(null);
           e.currentTarget.setPointerCapture(e.pointerId);
         }}
-        onPointerUp={(e) => {
-          const target = document
+        onPointerMove={(e) => {
+          if (!dragged.current) return;
+          const under = document
             .elementFromPoint(e.clientX, e.clientY)
             ?.closest<HTMLElement>('[data-prompt-id]')?.dataset.promptId;
-          const id = dragged.current;
+          setPromptOver(under && under !== dragged.current ? under : null);
+        }}
+        onPointerUp={(e) => {
+          const id = dragged.current,
+            target = document
+              .elementFromPoint(e.clientX, e.clientY)
+              ?.closest<HTMLElement>('[data-prompt-id]')?.dataset.promptId;
           dragged.current = null;
-          if (id && target) void run(() => reorder(id, target));
+          setPromptDragging(null);
+          setPromptOver(null);
+          if (id && target && target !== id) void run(() => reorder(id, target));
         }}
         onPointerCancel={() => {
           dragged.current = null;
+          setPromptDragging(null);
+          setPromptOver(null);
         }}
         onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            dragged.current = null;
+            setPromptDragging(null);
+            setPromptOver(null);
+            return;
+          }
           if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
           e.preventDefault();
           const index = rows.findIndex((p) => p.id === prompt.id),
@@ -364,7 +488,7 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
           if (target) void run(() => reorder(prompt.id, target.id));
         }}
       >
-        <GripVertical size={14} />
+        <GripVertical size={16} />
       </button>
       <button
         role="checkbox"
@@ -382,11 +506,8 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
         onClick={() => void run(() => openPrompt(prompt))}
       >
         <span>
-          {prompt.title === '未命名提示词' && prompt.body
-            ? prompt.body
-                .split('\n')
-                .find((line) => line.trim())
-                ?.slice(0, 65)
+          {prompt.title === '未命名提示词'
+            ? (promptPreview(prompt.body) ?? prompt.title)
             : prompt.title}
         </span>
         <small>
@@ -474,77 +595,14 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
       )}
       <div className="cloud-layout">
         <aside id="cloud-project-navigation" className="cloud-projects" aria-label="项目导航">
-          <div className="cloud-section-heading">
-            <h2>我的项目</h2>
-            <button
-              aria-label="新建项目"
-              disabled={busy}
-              onClick={() => setNewProject(!newProject)}
-            >
-              <Plus size={18} />
-            </button>
-          </div>
-          {newProject && (
-            <form
-              className="cloud-new-project"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void run(async () => {
-                  if (!(await editor.flush())) return;
-                  const p = await cloudClient.createProject(newName);
-                  setProjects((items) => [p, ...items]);
-                  setNewProject(false);
-                  setNewName('');
-                  await openProject(p.id);
-                });
-              }}
-            >
-              <input
-                aria-label="项目名称"
-                placeholder="项目名称"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                required
-                maxLength={120}
-              />
-              <button disabled={busy} className="primary-button">
-                创建
-              </button>
-            </form>
-          )}
-          <ul>
-            {projects
-              .filter((p) => !p.deletedAt)
-              .map((p) => (
-                <li key={p.id}>
-                  <button
-                    className={p.id === projectId ? 'selected' : ''}
-                    disabled={busy}
-                    onClick={() => void run(() => openProject(p.id))}
-                  >
-                    <Folder size={15} />
-                    <span>{p.name}</span>
-                    {Boolean(p.archived) && <small>归档</small>}
-                  </button>
-                </li>
-              ))}
-          </ul>
-          {!projects.length && <p className="cloud-empty">创建第一个项目，开始记录想法。</p>}
-          <details>
-            <summary>已删除项目</summary>
-            <ul>
-              {projects
-                .filter((p) => p.deletedAt)
-                .map((p) => (
-                  <li key={p.id}>
-                    <button disabled={busy} onClick={() => void run(() => openProject(p.id))}>
-                      {p.name}
-                    </button>
-                  </li>
-                ))}
-            </ul>
-          </details>
-          <p className="cloud-storage-note">数据保存到服务器。换台设备登录即可继续。</p>
+          <CloudProjectNavigator
+            projects={projects}
+            selectedId={projectId}
+            busy={busy}
+            onOpen={(id) => void run(() => openProject(id))}
+            onCreate={(value) => void run(() => createProject(value))}
+            onReorder={(id, targetId) => void run(() => reorderProjects(id, targetId))}
+          />
         </aside>
         <div
           className="cloud-resize-handle cloud-project-resize"
@@ -566,6 +624,9 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
         <section id="cloud-prompt-list" className="cloud-list" aria-label="提示词列表">
           <div className="cloud-section-heading">
             <h1>{project?.name ?? '个人空间'}</h1>
+            <button aria-label="导出个人空间" disabled={busy} onClick={exportSpace}>
+              导出空间
+            </button>
             {project && (
               <button
                 aria-label="修改项目信息"
@@ -605,7 +666,80 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
                   maxLength={4000}
                 />
               </label>
+              <label>
+                颜色
+                <span className="cloud-color-picker" role="radiogroup" aria-label="项目颜色">
+                  {(Object.keys(projectColors) as ProjectColor[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="radio"
+                      aria-checked={project.color === key}
+                      aria-label={`颜色 ${key}`}
+                      className={project.color === key ? 'selected' : ''}
+                      style={{ background: projectColors[key] }}
+                      disabled={busy}
+                      onClick={() => void run(() => updateProject({ color: key }))}
+                    />
+                  ))}
+                </span>
+              </label>
               <button disabled={busy}>保存信息</button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={exportProject.bind(null, project.id, project.name)}
+              >
+                导出项目
+              </button>
+              <div className="cloud-share">
+                <button type="button" disabled={busy} onClick={() => void run(loadShare)}>
+                  分享链接
+                </button>
+                {share &&
+                  (activeShareToken ? (
+                    <div className="cloud-share-active">
+                      <input
+                        readOnly
+                        aria-label="分享链接"
+                        value={shareUrl(activeShareToken)}
+                        onFocus={(event) => event.currentTarget.select()}
+                      />
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          void copyText(shareUrl(activeShareToken)).then((result) =>
+                            setMessage(
+                              result.ok ? '已复制分享链接。' : '复制失败，请手动选择链接复制。',
+                            ),
+                          )
+                        }
+                      >
+                        复制链接
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          if (window.confirm('撤销分享链接？撤销后该链接立即失效。'))
+                            void run(revokeShare);
+                        }}
+                      >
+                        撤销分享
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="cloud-share-active">
+                      <p className="cloud-share-hint">
+                        链接创建后，任何拿到链接的人都能只读查看此项目，可随时撤销。
+                      </p>
+                      <button type="button" disabled={busy} onClick={() => void run(createShare)}>
+                        创建分享链接
+                      </button>
+                    </div>
+                  ))}
+              </div>
               <button
                 type="button"
                 disabled={busy}
@@ -650,6 +784,11 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
                 </button>
               </div>
               <div className="cloud-list-scroll">
+                {promptDragging && (
+                  <p className="cloud-drag-hint" role="status">
+                    拖到目标提示词上后松开；按 Esc 取消。
+                  </p>
+                )}
                 <ul>{activeRows.map(renderRow)}</ul>
                 {!activeRows.length && (
                   <p className="cloud-empty">
@@ -849,7 +988,10 @@ function PersonalSpace({ name, onUnsaved }: { name: string; onUnsaved: (dirty: b
                 )}
               </div>
               <footer className="cloud-editor-footer">
-                <span>{editor.draft.body.length.toLocaleString()} 字</span>
+                <span>
+                  {editor.draft.body.length.toLocaleString()} 字 · 约{' '}
+                  {tokenEstimate(editor.draft.body).toLocaleString()} Tokens（粗估）
+                </span>
                 <details
                   onToggle={(e) => {
                     if (e.currentTarget.open && editor.draft)

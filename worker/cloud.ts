@@ -3,11 +3,14 @@ import { hashPassword } from 'better-auth/crypto';
 import { createAuth } from './auth';
 import type { WorkerEnvironment } from './index';
 import {
+  CLOUD_PROMPT_DEFAULT_BODY,
   cloudId,
+  cloudOrderInput,
   projectInput,
   projectPatch,
   promptPatch,
   type CloudAccess,
+  type CloudExportProject,
   type CloudProject,
   type CloudPrompt,
   type CloudVersion,
@@ -28,9 +31,61 @@ class ApiFault extends Error {
     super(code);
   }
 }
-const projectFields = 'id,name,description,revision,archived,deletedAt,createdAt,updatedAt';
+const projectFields =
+  'id,name,description,color,sortOrder,revision,archived,deletedAt,createdAt,updatedAt';
 const promptFields =
   'id,projectId,title,body,status,priority,sortOrder,revision,nextVersion,deletedAt,createdAt,updatedAt';
+
+async function ensureSpace(db: WorkerEnvironment['DB'], owner: string): Promise<number> {
+  await db
+    .prepare(
+      'INSERT INTO cloud_space(ownerId,revision,updatedAt) VALUES(?,1,?) ON CONFLICT(ownerId) DO NOTHING',
+    )
+    .bind(owner, new Date().toISOString())
+    .run();
+  const row = await db
+    .prepare('SELECT revision FROM cloud_space WHERE ownerId=?')
+    .bind(owner)
+    .first<{ revision: number }>();
+  return row?.revision ?? 1;
+}
+
+async function orderProjects(
+  db: WorkerEnvironment['DB'],
+  owner: string,
+  data: { revision: number; ids: string[] },
+) {
+  const current = (
+    await db
+      .prepare('SELECT id FROM cloud_project WHERE ownerId=? AND deletedAt IS NULL')
+      .bind(owner)
+      .all<{ id: string }>()
+  ).results;
+  if (
+    new Set(data.ids).size !== data.ids.length ||
+    current.length !== data.ids.length ||
+    current.some((row) => !data.ids.includes(row.id))
+  )
+    throw new ApiFault(400, 'INVALID_ORDER');
+  const token = crypto.randomUUID(),
+    now = new Date().toISOString();
+  const statements = [
+    db
+      .prepare(
+        'INSERT INTO cloud_space(ownerId,revision,operation,updatedAt) VALUES(?,2,?,?) ON CONFLICT(ownerId) DO UPDATE SET revision=revision+1,operation=excluded.operation,updatedAt=excluded.updatedAt WHERE cloud_space.revision=?',
+      )
+      .bind(owner, token, now, data.revision),
+    ...data.ids.map((id, index) =>
+      db
+        .prepare(
+          'UPDATE cloud_project SET sortOrder=? WHERE id=? AND ownerId=? AND deletedAt IS NULL AND EXISTS(SELECT 1 FROM cloud_space WHERE ownerId=? AND operation=?)',
+        )
+        .bind(index, id, owner, owner, token),
+    ),
+  ];
+  const results = await db.batch(statements);
+  if (!results[0]?.meta.changes) throw new ApiFault(409, 'REVISION_CONFLICT');
+}
 
 async function input(request: Request): Promise<unknown> {
   if (!request.headers.get('content-type')?.startsWith('application/json'))
@@ -68,6 +123,14 @@ export async function getAccess(env: WorkerEnvironment, userId: string) {
     .first<CloudAccess>();
 }
 
+// Unguessable URL-safe capability token for a read-only project share link.
+function shareToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 export async function handleCloud(request: Request, env: WorkerEnvironment): Promise<Response> {
   try {
     const url = new URL(request.url),
@@ -95,13 +158,71 @@ export async function handleCloud(request: Request, env: WorkerEnvironment): Pro
       return await handleAdmin(request, env, owner, url);
     }
     const db = env.DB;
+    if (path === '/api/space' && request.method === 'GET') {
+      const revision = await ensureSpace(db, owner);
+      const projects = (
+        await db
+          .prepare(
+            `SELECT ${projectFields} FROM cloud_project WHERE ownerId=? ORDER BY sortOrder, createdAt DESC LIMIT 50`,
+          )
+          .bind(owner)
+          .all()
+      ).results;
+      return cloudJson({ revision, projects });
+    }
+    if (path === '/api/export' && request.method === 'GET') {
+      const scope = url.searchParams.get('scope');
+      if (scope !== 'project' && scope !== 'space') throw new ApiFault(400, 'INVALID_REQUEST');
+      const projectId = scope === 'project' ? cloudId.parse(url.searchParams.get('id')) : null;
+      const projectRows = (
+        await db
+          .prepare(
+            scope === 'project'
+              ? `SELECT ${projectFields} FROM cloud_project WHERE ownerId=? AND deletedAt IS NULL AND id=?`
+              : `SELECT ${projectFields} FROM cloud_project WHERE ownerId=? AND deletedAt IS NULL ORDER BY sortOrder, createdAt DESC LIMIT 50`,
+          )
+          .bind(...(scope === 'project' ? [owner, projectId] : [owner]))
+          .all<CloudProject>()
+      ).results;
+      if (!projectRows.length) throw new ApiFault(404, 'NOT_FOUND');
+      const promptRows = (
+        await db
+          .prepare(
+            `SELECT ${promptFields} FROM cloud_prompt WHERE ownerId=? AND deletedAt IS NULL ORDER BY sortOrder, createdAt LIMIT 500`,
+          )
+          .bind(owner)
+          .all<CloudPrompt>()
+      ).results;
+      const versionRows = (
+        await db
+          .prepare(
+            'SELECT id,promptId,number,body,createdAt FROM cloud_version WHERE ownerId=? ORDER BY promptId, number',
+          )
+          .bind(owner)
+          .all<CloudVersion>()
+      ).results;
+      const projects: CloudExportProject[] = projectRows.map((project) => ({
+        project,
+        prompts: promptRows
+          .filter((prompt) => prompt.projectId === project.id)
+          .map((prompt) => ({
+            prompt,
+            versions: versionRows.filter((version) => version.promptId === prompt.id),
+          })),
+      }));
+      return cloudJson({ projects });
+    }
+    if (path === '/api/projects/order' && request.method === 'POST') {
+      await orderProjects(db, owner, cloudOrderInput.parse(await input(request)));
+      return cloudJson({ ok: true });
+    }
     if (path === '/api/projects') {
       if (request.method === 'GET')
         return cloudJson(
           (
             await db
               .prepare(
-                `SELECT ${projectFields} FROM cloud_project WHERE ownerId=? ORDER BY createdAt DESC LIMIT 50`,
+                `SELECT ${projectFields} FROM cloud_project WHERE ownerId=? AND deletedAt IS NULL ORDER BY sortOrder, createdAt DESC LIMIT 50`,
               )
               .bind(owner)
               .all()
@@ -113,9 +234,9 @@ export async function handleCloud(request: Request, env: WorkerEnvironment): Pro
           now = new Date().toISOString();
         const r = await db
           .prepare(
-            'INSERT INTO cloud_project(id,ownerId,name,description,createdAt,updatedAt) SELECT ?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM cloud_project WHERE ownerId=?)<50',
+            'INSERT INTO cloud_project(id,ownerId,name,description,color,sortOrder,createdAt,updatedAt) SELECT ?,?,?,?,?,COALESCE((SELECT MIN(sortOrder)-1 FROM cloud_project WHERE ownerId=?),0),?,? WHERE (SELECT COUNT(*) FROM cloud_project WHERE ownerId=?)<50',
           )
-          .bind(id, owner, data.name, data.description, now, now, owner)
+          .bind(id, owner, data.name, data.description, 'green', owner, now, now, owner)
           .run();
         if (!r.meta.changes) throw new ApiFault(422, 'PROJECT_LIMIT');
         return cloudJson(
@@ -127,7 +248,7 @@ export async function handleCloud(request: Request, env: WorkerEnvironment): Pro
         );
       }
     }
-    const projectMatch = /^\/api\/projects\/([^/]+)(?:\/(prompts|order))?$/.exec(path);
+    const projectMatch = /^\/api\/projects\/([^/]+)(?:\/(prompts|order|share))?$/.exec(path);
     if (projectMatch) {
       const id = cloudId.parse(projectMatch[1]);
       const project = await db
@@ -136,15 +257,63 @@ export async function handleCloud(request: Request, env: WorkerEnvironment): Pro
         .first<CloudProject>();
       if (!project) throw new ApiFault(404, 'NOT_FOUND');
       const action = projectMatch[2];
+      if (action === 'share') {
+        const share = await db
+          .prepare(
+            'SELECT token,createdAt,revokedAt FROM cloud_share WHERE projectId=? AND ownerId=?',
+          )
+          .bind(id, owner)
+          .first<{ token: string; createdAt: string; revokedAt: string | null }>();
+        if (request.method === 'GET')
+          return cloudJson(
+            share
+              ? {
+                  active: !share.revokedAt,
+                  token: share.revokedAt ? null : share.token,
+                  createdAt: share.createdAt,
+                  revokedAt: share.revokedAt,
+                }
+              : { active: false, token: null, createdAt: null, revokedAt: null },
+          );
+        if (request.method === 'POST') {
+          if (project.deletedAt) throw new ApiFault(403, 'PROJECT_READ_ONLY');
+          if (share && !share.revokedAt)
+            return cloudJson({
+              active: true,
+              token: share.token,
+              createdAt: share.createdAt,
+              revokedAt: null,
+            });
+          const token = shareToken(),
+            now = new Date().toISOString();
+          await db
+            .prepare(
+              'INSERT INTO cloud_share(id,ownerId,projectId,token,createdAt,revokedAt) VALUES(?,?,?,?,?,NULL) ON CONFLICT(projectId) DO UPDATE SET token=excluded.token,createdAt=excluded.createdAt,revokedAt=NULL',
+            )
+            .bind(crypto.randomUUID(), owner, id, token, now)
+            .run();
+          return cloudJson({ active: true, token, createdAt: now, revokedAt: null }, 201);
+        }
+        if (request.method === 'DELETE') {
+          await db
+            .prepare(
+              'UPDATE cloud_share SET revokedAt=? WHERE projectId=? AND ownerId=? AND revokedAt IS NULL',
+            )
+            .bind(new Date().toISOString(), id, owner)
+            .run();
+          return cloudJson({ ok: true });
+        }
+      }
       if (!action && request.method === 'PATCH') {
         const data = projectPatch.parse(await input(request));
         const r = await db
           .prepare(
-            'UPDATE cloud_project SET name=?,description=?,archived=?,deletedAt=?,revision=revision+1,updatedAt=? WHERE id=? AND ownerId=? AND revision=?',
+            'UPDATE cloud_project SET name=?,description=?,color=?,archived=?,deletedAt=?,revision=revision+1,updatedAt=? WHERE id=? AND ownerId=? AND revision=?',
           )
           .bind(
             data.name ?? project.name,
             data.description ?? project.description,
+            data.color ?? project.color,
             data.archived === undefined ? project.archived : Number(data.archived),
             data.deleted === undefined
               ? project.deletedAt
@@ -182,9 +351,21 @@ export async function handleCloud(request: Request, env: WorkerEnvironment): Pro
           now = new Date().toISOString();
         const r = await db
           .prepare(
-            `INSERT INTO cloud_prompt(id,projectId,ownerId,sortOrder,createdAt,updatedAt) SELECT ?,?,?,COALESCE((SELECT MAX(sortOrder)+1 FROM cloud_prompt WHERE projectId=? AND ownerId=?),0),?,? WHERE (SELECT COUNT(*) FROM cloud_prompt WHERE ownerId=?)<500 AND EXISTS(SELECT 1 FROM cloud_project WHERE id=? AND ownerId=? AND archived=0 AND deletedAt IS NULL)`,
+            `INSERT INTO cloud_prompt(id,projectId,ownerId,body,sortOrder,createdAt,updatedAt) SELECT ?,?,?,?,COALESCE((SELECT MAX(sortOrder)+1 FROM cloud_prompt WHERE projectId=? AND ownerId=?),0),?,? WHERE (SELECT COUNT(*) FROM cloud_prompt WHERE ownerId=?)<500 AND EXISTS(SELECT 1 FROM cloud_project WHERE id=? AND ownerId=? AND archived=0 AND deletedAt IS NULL)`,
           )
-          .bind(promptId, id, owner, id, owner, now, now, owner, id, owner)
+          .bind(
+            promptId,
+            id,
+            owner,
+            CLOUD_PROMPT_DEFAULT_BODY,
+            id,
+            owner,
+            now,
+            now,
+            owner,
+            id,
+            owner,
+          )
           .run();
         if (!r.meta.changes) throw new ApiFault(422, 'PROMPT_LIMIT');
         return cloudJson(
@@ -450,4 +631,51 @@ async function handleAdmin(request: Request, env: WorkerEnvironment, owner: stri
     return cloudJson({ ok: true });
   }
   throw new ApiFault(404, 'NOT_FOUND');
+}
+
+// Anonymous, read-only view of a single shared project. No session, no ownerId, no versions.
+export async function handlePublicShare(
+  request: Request,
+  env: WorkerEnvironment,
+  url: URL,
+): Promise<Response> {
+  try {
+    if (request.method !== 'GET') throw new ApiFault(405, 'METHOD_NOT_ALLOWED');
+    const token = url.pathname.slice('/api/share/'.length);
+    if (!/^[A-Za-z0-9_-]{16,64}$/.test(token)) throw new ApiFault(404, 'NOT_FOUND');
+    const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+    const bucket = Math.floor(Date.now() / 60000);
+    const accepted = await env.DB.prepare(
+      'INSERT INTO rateLimit(id,key,count,lastRequest) VALUES(?,?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN lastRequest<>excluded.lastRequest THEN 1 ELSE count+1 END,lastRequest=excluded.lastRequest WHERE lastRequest<>excluded.lastRequest OR count<120 RETURNING count',
+    )
+      .bind(crypto.randomUUID(), `share-read:${ip}`, bucket)
+      .first();
+    if (!accepted) throw new ApiFault(429, 'RATE_LIMITED');
+    const share = await env.DB.prepare(
+      'SELECT projectId,ownerId FROM cloud_share WHERE token=? AND revokedAt IS NULL',
+    )
+      .bind(token)
+      .first<{ projectId: string; ownerId: string }>();
+    if (!share) throw new ApiFault(404, 'NOT_FOUND');
+    const project = await env.DB.prepare(
+      'SELECT name,description FROM cloud_project WHERE id=? AND ownerId=? AND deletedAt IS NULL',
+    )
+      .bind(share.projectId, share.ownerId)
+      .first<{ name: string; description: string }>();
+    if (!project) throw new ApiFault(404, 'NOT_FOUND');
+    const prompts = (
+      await env.DB.prepare(
+        'SELECT title,body FROM cloud_prompt WHERE projectId=? AND ownerId=? AND deletedAt IS NULL ORDER BY sortOrder, createdAt LIMIT 500',
+      )
+        .bind(share.projectId, share.ownerId)
+        .all<{ title: string; body: string }>()
+    ).results;
+    return cloudJson({
+      project: { name: project.name, description: project.description },
+      prompts,
+    });
+  } catch (error) {
+    if (error instanceof ApiFault) return cloudJson({ error: error.code }, error.status);
+    return cloudJson({ error: 'SERVICE_UNAVAILABLE' }, 503);
+  }
 }

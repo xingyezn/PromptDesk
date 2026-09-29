@@ -9,6 +9,79 @@ export const formatLabels = {
   table: '表格',
 } as const;
 export type FormatKind = keyof typeof formatLabels;
+
+const orderedListLine = /^([ \t]*)(\d+)([.)])(?:\s.*)?$/;
+const continuationLine = /^[ \t]+\S/;
+
+// Renumbers each contiguous ordered-list block touched by an edit, so deleting a middle
+// item shifts the following numbers. Returns minimal marker-only replacements to keep the
+// cursor and undo history stable; unrelated blocks are left untouched.
+export function renumberOrderedList(
+  doc: string,
+  touchedLines: number[],
+): { from: number; to: number; insert: string }[] {
+  const lines = doc.split('\n');
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    offsets.push(offset);
+    offset += line.length + 1;
+  }
+  const blocks: { start: number; end: number }[] = [];
+  const claimed = new Set<number>();
+  for (const raw of touchedLines) {
+    const touched = Math.min(Math.max(raw, 0), lines.length - 1);
+    if (claimed.has(touched)) continue;
+    let start = touched;
+    while (
+      start > 0 &&
+      (orderedListLine.test(lines[start - 1]!) || continuationLine.test(lines[start - 1]!))
+    )
+      start--;
+    let end = touched;
+    while (
+      end < lines.length - 1 &&
+      (orderedListLine.test(lines[end + 1]!) || continuationLine.test(lines[end + 1]!))
+    )
+      end++;
+    for (let i = start; i <= end; i++) claimed.add(i);
+    blocks.push({ start, end });
+  }
+  blocks.sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const block of blocks) {
+    const last = merged[merged.length - 1];
+    if (last && block.start <= last.end + 1) last.end = Math.max(last.end, block.end);
+    else merged.push({ ...block });
+  }
+  const changes: { from: number; to: number; insert: string }[] = [];
+  for (const { start, end } of merged) {
+    const levels: { indent: string; next: number; delimiter: string }[] = [];
+    for (let i = start; i <= end; i++) {
+      const match = orderedListLine.exec(lines[i]!);
+      if (!match) continue;
+      const indent = match[1]!;
+      while (levels.length && levels[levels.length - 1]!.indent.length > indent.length)
+        levels.pop();
+      let level = levels[levels.length - 1];
+      if (!level || level.indent.length !== indent.length) {
+        level = { indent, next: 1, delimiter: match[3]! };
+        levels.push(level);
+      }
+      const digits = match[2]!,
+        delimiter = match[3]!,
+        replacement = `${level.next++}${level.delimiter}`;
+      const markerFrom = offsets[i]! + indent.length,
+        markerTo = markerFrom + digits.length + delimiter.length;
+      if (
+        lines[i]!.slice(indent.length, indent.length + digits.length + delimiter.length) !==
+        replacement
+      )
+        changes.push({ from: markerFrom, to: markerTo, insert: replacement });
+    }
+  }
+  return changes;
+}
 export function formatSelection(kind: FormatKind, selected: string): string {
   const lines = (kind === 'numbered' ? selected : selected || '内容').split('\n');
   switch (kind) {

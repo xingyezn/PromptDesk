@@ -29,6 +29,7 @@ test('personal space persists text, checkpoints, compact completion and mobile n
     await page.getByRole('button', { name: '新建', exact: true }).click();
     const body = page.getByRole('textbox', { name: 'Prompt 正文' });
     await body.fill('Synthetic prompt body\n1. First\n2. Second');
+    await page.getByRole('button', { name: '保存提示词', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: '已保存到服务器' })).toBeVisible();
     await page.getByRole('button', { name: '设为待提交', exact: true }).click();
     await page.getByRole('checkbox', { name: /标记完成/ }).click();

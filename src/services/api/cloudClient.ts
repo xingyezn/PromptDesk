@@ -1,8 +1,12 @@
 import { z } from 'zod';
 import {
   cloudAccessSchema,
+  cloudExportSchema,
   cloudProjectSchema,
   cloudPromptSchema,
+  cloudShareSchema,
+  cloudSharedProjectSchema,
+  cloudSpaceSchema,
   cloudVersionSchema,
   managedUserSchema,
   type PromptPatch,
@@ -45,20 +49,33 @@ async function request<T>(
   const result: unknown = await response.json();
   if (!response.ok) {
     const failure = z.object({ error: z.string() }).safeParse(result);
-    throw new CloudError(
-      response.status,
-      failure.success ? failure.data.error : 'SERVICE_UNAVAILABLE',
-    );
+    const code = failure.success ? failure.data.error : 'SERVICE_UNAVAILABLE';
+    // Diagnostic only: status and server error code, never request path or content.
+    console.warn('[api] request failed', method, response.status, code);
+    throw new CloudError(response.status, code);
   }
   return schema.parse(result);
 }
 const ok = z.object({ ok: z.boolean() });
 export const cloudClient = {
   me: () => request('/me', cloudAccessSchema),
+  space: () => request('/space', cloudSpaceSchema),
   projects: () => request('/projects', z.array(cloudProjectSchema)),
   createProject: (name: string) => request('/projects', cloudProjectSchema, 'POST', { name }),
   updateProject: (id: string, patch: unknown) =>
     request(`/projects/${id}`, cloudProjectSchema, 'PATCH', patch),
+  orderProjects: (revision: number, ids: string[]) =>
+    request('/projects/order', ok, 'POST', { revision, ids }),
+  share: (id: string) => request(`/projects/${id}/share`, cloudShareSchema),
+  createShare: (id: string) => request(`/projects/${id}/share`, cloudShareSchema, 'POST', {}),
+  revokeShare: (id: string) => request(`/projects/${id}/share`, ok, 'DELETE', {}),
+  sharedProject: (token: string) =>
+    request(`/share/${encodeURIComponent(token)}`, cloudSharedProjectSchema),
+  exportData: (scope: 'project' | 'space', id?: string) =>
+    request(
+      `/export?scope=${scope}${id ? `&id=${encodeURIComponent(id)}` : ''}`,
+      cloudExportSchema,
+    ),
   prompts: (id: string) => request(`/projects/${id}/prompts`, z.array(cloudPromptSchema)),
   createPrompt: (id: string) => request(`/projects/${id}/prompts`, cloudPromptSchema, 'POST', {}),
   prompt: (id: string) => request(`/prompts/${id}`, cloudPromptSchema),

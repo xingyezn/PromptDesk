@@ -1,15 +1,17 @@
 > **V0.3 当前产品约束（2026-09-27）**：用户明确要求关闭 GitHub Pages，取消本地工作空间。Cloudflare Workers 同源托管 React 前端/API，D1 是所有账户项目、提示词、历史版本的权威来源。登录后进入个人空间，API 根据会话 userId 隔离；管理员仅管理账户，不默认读取其他人的正文。旧章节仅是 V0.1/V0.2 历史规格，不再限制当前云端实现。既有本地文件保持原样，不自动导入。任务见 V0.3_TASKS.md。
 
-## V0.3 云端数据库（当前 schema=3）
+## V0.3 云端数据库（当前 schema=5）
 
 - `user_access(userId PK/FK user, role user|admin, disabled 0|1, mustChangePassword 0|1)`；新用户 trigger 默认 user，客户端不可写角色。
-- `cloud_project(id UUID PK, ownerId FK user, name, description, revision≥1, operation, archived 0|1, deletedAt, createdAt, updatedAt)`，UNIQUE(id,ownerId)，owner 索引。
-- `cloud_prompt(id UUID PK, projectId, ownerId, title, body, status draft|ready|completed, priority low|normal|high, sortOrder, revision≥1, nextVersion≥1, operation, deletedAt, createdAt, updatedAt)`；复合 FK(projectId,ownerId) 防止错误归属，owner/project/order 索引。默认未命名提示词，无创建标题表单。
+- `cloud_project(id UUID PK, ownerId FK user, name, description, color slate|green|teal|blue|indigo|violet|pink|amber|red, sortOrder, revision≥1, operation, archived 0|1, deletedAt, createdAt, updatedAt)`，UNIQUE(id,ownerId)，owner 索引；`color` 为项目卡片的固定枚举颜色，不存任意 CSS；`sortOrder` 支持项目拖拽排序（越小越靠前）。列表视图按 `sortOrder, createdAt DESC` 显示，无文件夹分组表。
+- `cloud_prompt(id UUID PK, projectId, ownerId, title, body, status draft|ready|completed, priority low|normal|high, sortOrder, revision≥1, nextVersion≥1, operation, deletedAt, createdAt, updatedAt)`；复合 FK(projectId,ownerId) 防止错误归属，owner/project/order 索引。默认未命名提示词，无创建标题表单；新建正文默认为有序列表首项 `1. `。token 数由客户端粗估，不落库。
+- `cloud_space(ownerId PK/FK user, revision≥1, operation, updatedAt)` 仅用于项目拖拽排序的 CAS，不含正文；无 `cloud_folder` 表。
+- `cloud_share(id UUID PK, ownerId, projectId, token UNIQUE, createdAt, revokedAt)`，`UNIQUE(projectId)` 每项目至多一条，复合 FK(projectId,ownerId) 级联；`token` 是 24 字节随机 URL-safe 只读能力串，`revokedAt` 非空即失效。匿名 `GET /api/share/:token` 仅返回项目名/描述与未删除提示词的标题/正文，不含 ownerId/版本/revision，且按 IP 限流。
 - `cloud_version(id UUID PK, promptId, ownerId, number, body, createdAt)`，UNIQUE(promptId,number)，复合 FK(promptId,ownerId)，UPDATE trigger 拒绝变更；仅账户永久删除会级联清理版本。
 - `cloud_usage(userId FK, bytes)`，CHECK 0≤bytes≤10MiB，正文/版本增删改 trigger 更新真实 UTF-8 字节数；软删除不释放额度。
 - DB 日期字段 cloud 表用 UTC ISO 字符串，BetterAuth auth 表接受适配器写入的 ISO 日期文本及历史毫秒整数；role/布尔字段整数，API 不泄漏 ownerId/operation/hash/password。DAO 返回数据以 src/domain/cloud.ts 校验。
 - Prompt 逻辑删除可恢复；完成与删除独立。已完成自动进入已完成分组，但不自动设 archived/禁止修改；项目归档只读，取消归档后编辑。排序和优先级独立，手动拖拽调整 sortOrder。
-- 本地 Workspace schema=2 不再是当前数据源；与 D1 schema=3 无自动映射。用户磁盘/旧缓存不读取不上传；旧账户迁移仅新增默认权限与空个人空间，不改密码、不改邮箱状态。
+- 本地 Workspace schema=2 不再是当前数据源；与 D1 schema=5 无自动映射。用户磁盘/旧缓存不读取不上传；旧账户迁移仅新增默认权限与空个人空间，不改密码、不改邮箱状态。
 
 # PromptDesk V0.1 数据规范
 
